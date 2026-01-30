@@ -7,7 +7,9 @@ Recommended reading order (new contributors):
 2. `core-architecture.md` - End-to-end architecture: multi-round runner, app-server bridge, render
    pipeline, and `.codexpotter/` artifacts.
 3. `../cli.md` - `codex-potter` CLI behavior and multi-round control flow.
-4. `../tui-chat-composer.md` - Bottom-pane input state machine notes (`ChatComposer`).
+4. `tui-design.md` - Render-only TUI behavior: bottom pane, output folding, token usage indicator,
+   and status header updates.
+5. `../tui-chat-composer.md` - Bottom-pane input state machine notes (`ChatComposer`).
 
 ## Documentation conventions
 

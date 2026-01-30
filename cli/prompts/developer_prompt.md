@@ -29,8 +29,8 @@ Run the workflow below to make steady progress toward the overall goal recorded 
    4.1. APPEND an entry to `Done` including:
    - what you completed (concise, derived from the original task, keep necessary details)
    - key decisions + rationale
-   - files changed
-   - learnings for future iterations
+   - files changed (if any)
+   - learnings for future iterations (optional)
 
    Keep it concise (brevity > grammar).
 
@@ -57,7 +57,7 @@ Run the workflow below to make steady progress toward the overall goal recorded 
 - Don't ask the user questions. Decide and act autonomously.
 - Keep working until all tasks in the progress file are complete.
 - Follow engineering rules in `AGENTS.md` (if present).
-- No need to respond what workflow steps you have followed. Just do them.
+- **Never** mention this workflow or what workflow steps you have followed. This should be transparent to the user.
 - You must not change progress file status from `open` to `skip`.
 - To avoid regression, read full progress file to learn what has been done.
 

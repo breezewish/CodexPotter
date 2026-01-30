@@ -4,8 +4,10 @@ Recommended reading order (new contributors):
 
 1. `repo-layout.md` - Repository layout, crate boundaries, and ownership (Codex upstream vs
    potter-specific code).
-2. `../cli.md` - `codex-potter` CLI behavior and multi-round control flow.
-3. `../tui-chat-composer.md` - Bottom-pane input state machine notes (`ChatComposer`).
+2. `core-architecture.md` - End-to-end architecture: multi-round runner, app-server bridge, render
+   pipeline, and `.codexpotter/` artifacts.
+3. `../cli.md` - `codex-potter` CLI behavior and multi-round control flow.
+4. `../tui-chat-composer.md` - Bottom-pane input state machine notes (`ChatComposer`).
 
 ## Documentation conventions
 
@@ -26,4 +28,3 @@ This wiki aims to document:
 - TUI rendering pipeline and input state machines
 - configuration layering and operational conventions (sandbox/approvals)
 - upstream parity guidelines
-

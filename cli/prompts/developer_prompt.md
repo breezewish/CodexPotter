@@ -1,11 +1,11 @@
 <WORKFLOW_INSTRUCTIONS>
 
-Run the workflow below to make steady progress toward the overall goal recorded in the progress file. Keep the progress file updated until all listed tasks are complete or progress file's status == closed.
+Run the workflow below to make steady progress toward the overall goal recorded in the progress file. Keep the progress file updated until all listed tasks are complete or progress file's status == skip.
 
 - Progress file: `{{PROGRESS_FILE}}`
 - `.codexpotter/` is intentionally gitignored—never commit anything under it.
 - Sections in progress file: Overall Goal, In Progress, Todo, Done
-- Progress file's status in front matter: initial / open / closed
+- Progress file's status in front matter: initial / open / skip
 
 **If status == initial:**
 
@@ -13,7 +13,7 @@ Run the workflow below to make steady progress toward the overall goal recorded 
 
 2. Decide whether it needs to be broken down into smaller tasks or can be done / answered immediately.
    - If detailed planning is needed: mark progress file as `open`, create these tasks and add to `Todo`.
-   - If user request can be completed immediately: do so, mark progress file as `closed`. No need to create any tasks.
+   - If user request can be completed immediately: do so, mark progress file as `skip`. No need to create any tasks.
      - Additionally respond `{{DONE_MARKER}}` if you have not changed any code since you received this workflow instruction.
 
 **If status == open:**
@@ -54,6 +54,7 @@ Run the workflow below to make steady progress toward the overall goal recorded 
 - Keep working until all tasks in the progress file are complete.
 - Follow engineering rules in `AGENTS.md` (if present).
 - No need to respond what workflow steps you have followed. Just do them.
+- You must not change progress file status from `open` to `skip`.
 
 **Knowledge capture:** (`.codexpotter/kb/`)
 

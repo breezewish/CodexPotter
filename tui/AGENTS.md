@@ -14,11 +14,13 @@ Unless explicitly documented below, changes should preserve parity.
 - `Tab` inserts a literal tab character (`\t`) into the composer.
 - No `$` skills picker.
 - No `Esc`-driven UX (no backtrack priming, no overlays/popups bound to `Esc`).
+- No steer mode (always queue).
+- No image pasting support.
 - Bottom pane footer messages are customized.
 
 ### Message Items
 
-- Reasoning messages are always hidden.
+- Reasoning messages are always not renderred.
 - Multiple Ran items with successful execution status are collapsed into one item.
 - Additional CodexPotter items (e.g. project creation hints, round hints).
 
@@ -26,6 +28,18 @@ Unless explicitly documented below, changes should preserve parity.
 
 - Round prefix is added to shimmer lines.
 - Remaining context is moved into the shimmer area.
+
+### Other differences
+
+- Codex-potter additionally provides a customized banner on startup
+- Unneeded logics and codes in codex TUI are intentionally removed to keep code tidy and focus (codex-potter's TUI is a _subset_ of codex's TUI):
+  - /command picker, `?` shortcuts overlay, /model selection, /resume selection, $skills picker
+  - Rewind (esc)
+  - Approval flows
+  - Other interactive features not needed in codex-potter
+  - Unneeded tests and snapshots
+- codex-potter explicitly forbids `pub(crate)` visibility in TUI code; only `pub` and private items are allowed.
+- codex-potter does not use Bazel.
 
 ## TUI Style conventions
 

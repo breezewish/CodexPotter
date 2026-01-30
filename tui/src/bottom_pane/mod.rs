@@ -116,8 +116,6 @@ impl BottomPane {
     }
 
     pub fn set_task_running(&mut self, running: bool) {
-        self.composer.set_task_running(running);
-
         if running {
             if self.status.is_none() {
                 self.status = Some(self.new_status_indicator());

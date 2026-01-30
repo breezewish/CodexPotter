@@ -118,7 +118,6 @@ use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::textarea::TextArea;
 use crate::bottom_pane::textarea::TextAreaState;
 use crate::ui_consts::LIVE_PREFIX_COLS;
-use codex_protocol::protocol::Op;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -164,7 +163,6 @@ pub struct ChatComposer {
     pending_pastes: Vec<(String, String)>,
     large_paste_counters: HashMap<usize, usize>,
     placeholder_text: String,
-    is_task_running: bool,
     /// When false, the composer is temporarily read-only (e.g. during sandbox setup).
     input_enabled: bool,
     input_disabled_placeholder: Option<String>,
@@ -207,7 +205,6 @@ impl ChatComposer {
             pending_pastes: Vec::new(),
             large_paste_counters: HashMap::new(),
             placeholder_text,
-            is_task_running: false,
             input_enabled: true,
             input_disabled_placeholder: None,
             paste_burst: PasteBurst::default(),
@@ -931,14 +928,6 @@ impl ChatComposer {
 
     /// Handle key event when no popup is visible.
     fn handle_key_event_without_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
-        if self.is_task_running
-            && key_event.code == KeyCode::Esc
-            && key_event.kind == KeyEventKind::Press
-        {
-            self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
-            return (InputResult::None, true);
-        }
-
         self.footer_mode = reset_mode_after_activity(self.footer_mode);
         match key_event {
             KeyEvent {
@@ -1270,10 +1259,6 @@ impl ChatComposer {
             self.active_popup = ActivePopup::None;
         }
     }
-
-    pub fn set_task_running(&mut self, running: bool) {
-        self.is_task_running = running;
-    }
 }
 
 impl Renderable for ChatComposer {
@@ -1487,36 +1472,12 @@ mod tests {
         });
 
         snapshot_composer_state("footer_mode_ctrl_c_interrupt", true, |composer| {
-            composer.set_task_running(true);
             composer.show_quit_shortcut_hint(key_hint::ctrl(KeyCode::Char('c')), true);
         });
 
         snapshot_composer_state("footer_mode_hidden_while_typing", true, |composer| {
             type_chars_humanlike(composer, &['h']);
         });
-    }
-
-    #[test]
-    fn esc_interrupt_sends_app_event_when_task_running() {
-        use crossterm::event::KeyCode;
-        use crossterm::event::KeyEvent;
-        use crossterm::event::KeyModifiers;
-
-        let (tx, mut rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            true,
-            sender,
-            true,
-            "Assign new task to CodexPotter".to_string(),
-            false,
-        );
-        composer.set_task_running(true);
-
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-
-        let event = rx.try_recv().expect("expected interrupt event");
-        assert!(matches!(event, AppEvent::CodexOp(Op::Interrupt)));
     }
 
     #[test]

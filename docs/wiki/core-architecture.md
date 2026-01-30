@@ -45,6 +45,8 @@ app-server mode and communicates via JSON-RPC over stdin/stdout:
 Within each round, `codex-potter` creates a new thread (`thread/start`) and then starts a single
 turn (`turn/start`).
 
+Deep dive: `docs/wiki/app-server-bridge.md`.
+
 ### Protocol crate (crate: `codex-protocol`)
 
 Module: `protocol/src/protocol.rs`.

@@ -9,6 +9,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::exec_command::relativize_to_home;
 use crate::text_formatting::center_truncate_path;
 use crate::ui_colors::orange_color;
+use crate::ui_colors::secondary_color;
 
 const POTTER_ASCII_ART: &[&str] = &[
     "                 __                                 __    __                   ",
@@ -68,7 +69,8 @@ pub fn build_startup_banner_lines(
         let split_at = ASCII_BOLD_SPLIT_COLS[idx].min(trimmed.len());
 
         let version_label = if idx == POTTER_ASCII_ART.len().saturating_sub(1) {
-            Some(take_prefix_by_width(&format!("v{version}"), banner_width).to_string())
+            let label = format!("v{version}");
+            Some(take_prefix_by_width(label.as_str(), banner_width).to_string())
         } else {
             None
         };
@@ -89,10 +91,12 @@ pub fn build_startup_banner_lines(
         let visible_split_at = split_at.min(visible.len());
         let (left, right) = visible.split_at(visible_split_at);
 
+        let dim_style = Style::default().dim();
+        let bold_secondary_style = Style::default().fg(secondary_color()).bold();
         let mut spans: Vec<Span<'static>> = vec![
-            Span::from(ASCII_INDENT[..indent_visible_width].to_string()),
-            Span::from(left.to_string()),
-            Span::styled(right.to_string(), Style::default().bold()),
+            Span::styled(ASCII_INDENT[..indent_visible_width].to_string(), dim_style),
+            Span::styled(left.to_string(), dim_style),
+            Span::styled(right.to_string(), bold_secondary_style),
         ];
 
         if let Some(version_label) = version_label {
@@ -195,10 +199,21 @@ mod tests {
                 "ascii art line {idx} must be indented",
             );
             assert!(
-                line.spans
-                    .iter()
-                    .any(|span| span.style.add_modifier.contains(Modifier::BOLD)),
-                "ascii art line {idx} must include a bold span",
+                line.spans[0].style.add_modifier.contains(Modifier::DIM),
+                "ascii art line {idx} indent must be dim",
+            );
+            assert!(
+                line.spans[1].style.add_modifier.contains(Modifier::DIM),
+                "ascii art line {idx} left span must be dim",
+            );
+            assert!(
+                line.spans[2].style.add_modifier.contains(Modifier::BOLD),
+                "ascii art line {idx} right span must be bold",
+            );
+            assert_eq!(
+                line.spans[2].style.fg,
+                Some(secondary_color()),
+                "ascii art line {idx} right span must use secondary color",
             );
         }
 

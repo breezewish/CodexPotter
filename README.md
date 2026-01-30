@@ -1,6 +1,4 @@
-# codex-potter
-
-codex + ralph loop + (knowledge) = codex-potter
+![codex-potter](./etc/banner.svg)
 
 Designing philosophy:
 

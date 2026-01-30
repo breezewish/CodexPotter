@@ -101,7 +101,6 @@ use super::chat_composer_history::ChatComposerHistory;
 use super::file_search_popup::FileSearchPopup;
 use super::footer::FooterMode;
 use super::footer::FooterProps;
-use super::footer::esc_hint_mode;
 use super::footer::footer_height;
 use super::footer::render_footer;
 use super::footer::reset_mode_after_activity;
@@ -119,6 +118,7 @@ use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::textarea::TextArea;
 use crate::bottom_pane::textarea::TextAreaState;
 use crate::ui_consts::LIVE_PREFIX_COLS;
+use codex_protocol::protocol::Op;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -159,7 +159,6 @@ pub struct ChatComposer {
     history: ChatComposerHistory,
     quit_shortcut_expires_at: Option<Instant>,
     quit_shortcut_key: KeyBinding,
-    esc_backtrack_hint: bool,
     dismissed_file_popup_token: Option<String>,
     current_file_query: Option<String>,
     pending_pastes: Vec<(String, String)>,
@@ -203,7 +202,6 @@ impl ChatComposer {
             history: ChatComposerHistory::new(),
             quit_shortcut_expires_at: None,
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
-            esc_backtrack_hint: false,
             dismissed_file_popup_token: None,
             current_file_query: None,
             pending_pastes: Vec::new(),
@@ -640,15 +638,7 @@ impl ChatComposer {
 
     /// Handle key events when file search popup is visible.
     fn handle_key_event_with_file_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
-        if key_event.code == KeyCode::Esc {
-            let next_mode = esc_hint_mode(self.footer_mode, self.is_task_running);
-            if next_mode != self.footer_mode {
-                self.footer_mode = next_mode;
-                return (InputResult::None, true);
-            }
-        } else {
-            self.footer_mode = reset_mode_after_activity(self.footer_mode);
-        }
+        self.footer_mode = reset_mode_after_activity(self.footer_mode);
         let ActivePopup::File(popup) = &mut self.active_popup else {
             unreachable!();
         };
@@ -941,17 +931,15 @@ impl ChatComposer {
 
     /// Handle key event when no popup is visible.
     fn handle_key_event_without_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
-        if key_event.code == KeyCode::Esc {
-            if self.is_empty() {
-                let next_mode = esc_hint_mode(self.footer_mode, self.is_task_running);
-                if next_mode != self.footer_mode {
-                    self.footer_mode = next_mode;
-                    return (InputResult::None, true);
-                }
-            }
-        } else {
-            self.footer_mode = reset_mode_after_activity(self.footer_mode);
+        if self.is_task_running
+            && key_event.code == KeyCode::Esc
+            && key_event.kind == KeyEventKind::Press
+        {
+            self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
+            return (InputResult::None, true);
         }
+
+        self.footer_mode = reset_mode_after_activity(self.footer_mode);
         match key_event {
             KeyEvent {
                 code: KeyCode::Char('d'),
@@ -1055,9 +1043,7 @@ impl ChatComposer {
         let now = Instant::now();
         self.handle_paste_burst_flush(now);
 
-        if !matches!(input.code, KeyCode::Esc) {
-            self.footer_mode = reset_mode_after_activity(self.footer_mode);
-        }
+        self.footer_mode = reset_mode_after_activity(self.footer_mode);
 
         // If we're capturing a burst and receive Enter, accumulate it instead of inserting.
         if matches!(input.code, KeyCode::Enter)
@@ -1190,7 +1176,6 @@ impl ChatComposer {
     fn footer_props(&self) -> FooterProps {
         FooterProps {
             mode: self.footer_mode(),
-            esc_backtrack_hint: self.esc_backtrack_hint,
             quit_shortcut_key: self.quit_shortcut_key,
             context_window_percent: self.context_window_percent,
             context_window_used_tokens: self.context_window_used_tokens,
@@ -1199,7 +1184,6 @@ impl ChatComposer {
 
     fn footer_mode(&self) -> FooterMode {
         match self.footer_mode {
-            FooterMode::EscHint => FooterMode::EscHint,
             FooterMode::QuitShortcutReminder if self.quit_shortcut_hint_visible() => {
                 FooterMode::QuitShortcutReminder
             }
@@ -1289,16 +1273,6 @@ impl ChatComposer {
 
     pub fn set_task_running(&mut self, running: bool) {
         self.is_task_running = running;
-    }
-
-    #[cfg(test)]
-    pub fn set_esc_backtrack_hint(&mut self, show: bool) {
-        self.esc_backtrack_hint = show;
-        if show {
-            self.footer_mode = esc_hint_mode(self.footer_mode, self.is_task_running);
-        } else {
-            self.footer_mode = reset_mode_after_activity(self.footer_mode);
-        }
     }
 }
 
@@ -1507,8 +1481,6 @@ mod tests {
     #[test]
     fn footer_mode_snapshots() {
         use crossterm::event::KeyCode;
-        use crossterm::event::KeyEvent;
-        use crossterm::event::KeyModifiers;
 
         snapshot_composer_state("footer_mode_ctrl_c_quit", true, |composer| {
             composer.show_quit_shortcut_hint(key_hint::ctrl(KeyCode::Char('c')), true);
@@ -1519,28 +1491,18 @@ mod tests {
             composer.show_quit_shortcut_hint(key_hint::ctrl(KeyCode::Char('c')), true);
         });
 
-        snapshot_composer_state("footer_mode_ctrl_c_then_esc_hint", true, |composer| {
-            composer.show_quit_shortcut_hint(key_hint::ctrl(KeyCode::Char('c')), true);
-            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-        });
-
-        snapshot_composer_state("footer_mode_esc_hint_backtrack", true, |composer| {
-            composer.set_esc_backtrack_hint(true);
-            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-        });
-
         snapshot_composer_state("footer_mode_hidden_while_typing", true, |composer| {
             type_chars_humanlike(composer, &['h']);
         });
     }
 
     #[test]
-    fn esc_hint_stays_hidden_with_draft_content() {
+    fn esc_interrupt_sends_app_event_when_task_running() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
         use crossterm::event::KeyModifiers;
 
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
         let mut composer = ChatComposer::new(
             true,
@@ -1549,18 +1511,12 @@ mod tests {
             "Assign new task to CodexPotter".to_string(),
             false,
         );
-
-        type_chars_humanlike(&mut composer, &['d']);
-
-        assert!(!composer.is_empty());
-        assert_eq!(composer.current_text(), "d");
-        assert_eq!(composer.footer_mode, FooterMode::ShortcutSummary);
-        assert!(matches!(composer.active_popup, ActivePopup::None));
+        composer.set_task_running(true);
 
         let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
-        assert_eq!(composer.footer_mode, FooterMode::ShortcutSummary);
-        assert!(!composer.esc_backtrack_hint);
+        let event = rx.try_recv().expect("expected interrupt event");
+        assert!(matches!(event, AppEvent::CodexOp(Op::Interrupt)));
     }
 
     #[test]

@@ -8,11 +8,9 @@
 //! Some footer content is time-based rather than event-based, such as the "press again to quit"
 //! hint. The owning widgets schedule redraws so time-based hints can expire even if the UI is
 //! otherwise idle.
-use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::render::line_utils::prefix_lines;
 use crate::ui_consts::FOOTER_INDENT_COLS;
-use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
@@ -30,7 +28,6 @@ use ratatui::widgets::Widget;
 #[derive(Clone, Copy, Debug)]
 pub struct FooterProps {
     pub mode: FooterMode,
-    pub esc_backtrack_hint: bool,
     /// Which key the user must press again to quit.
     ///
     /// This is rendered when `mode` is `FooterMode::QuitShortcutReminder`.
@@ -48,23 +45,12 @@ pub enum FooterMode {
     /// Transient "press again to quit" reminder (Ctrl+C/Ctrl+D).
     QuitShortcutReminder,
     ShortcutSummary,
-    EscHint,
     ContextOnly,
-}
-
-pub fn esc_hint_mode(current: FooterMode, is_task_running: bool) -> FooterMode {
-    if is_task_running {
-        current
-    } else {
-        FooterMode::EscHint
-    }
 }
 
 pub fn reset_mode_after_activity(current: FooterMode) -> FooterMode {
     match current {
-        FooterMode::EscHint | FooterMode::QuitShortcutReminder | FooterMode::ContextOnly => {
-            FooterMode::ShortcutSummary
-        }
+        FooterMode::QuitShortcutReminder | FooterMode::ContextOnly => FooterMode::ShortcutSummary,
         other => other,
     }
 }
@@ -94,7 +80,6 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
             );
             vec![line]
         }
-        FooterMode::EscHint => vec![esc_hint_line(props.esc_backtrack_hint)],
         FooterMode::ContextOnly => {
             let line = context_window_line(
                 props.context_window_percent,
@@ -107,21 +92,6 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
 
 fn quit_shortcut_reminder_line(key: KeyBinding) -> Line<'static> {
     Line::from(vec![key.into(), " again to quit".into()]).dim()
-}
-
-fn esc_hint_line(esc_backtrack_hint: bool) -> Line<'static> {
-    let esc = key_hint::plain(KeyCode::Esc);
-    if esc_backtrack_hint {
-        Line::from(vec![esc.into(), " again to edit previous message".into()]).dim()
-    } else {
-        Line::from(vec![
-            esc.into(),
-            " ".into(),
-            esc.into(),
-            " to edit previous message".into(),
-        ])
-        .dim()
-    }
 }
 
 fn context_window_line(percent: Option<i64>, used_tokens: Option<i64>) -> Line<'static> {
@@ -141,6 +111,8 @@ fn context_window_line(percent: Option<i64>, used_tokens: Option<i64>) -> Line<'
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::key_hint;
+    use crossterm::event::KeyCode;
     use insta::assert_snapshot;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -163,7 +135,6 @@ mod tests {
             "footer_shortcuts_default",
             FooterProps {
                 mode: FooterMode::ShortcutSummary,
-                esc_backtrack_hint: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
@@ -174,29 +145,6 @@ mod tests {
             "footer_ctrl_c_quit",
             FooterProps {
                 mode: FooterMode::QuitShortcutReminder,
-                esc_backtrack_hint: false,
-                quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
-                context_window_percent: None,
-                context_window_used_tokens: None,
-            },
-        );
-
-        snapshot_footer(
-            "footer_esc_hint_idle",
-            FooterProps {
-                mode: FooterMode::EscHint,
-                esc_backtrack_hint: false,
-                quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
-                context_window_percent: None,
-                context_window_used_tokens: None,
-            },
-        );
-
-        snapshot_footer(
-            "footer_esc_hint_primed",
-            FooterProps {
-                mode: FooterMode::EscHint,
-                esc_backtrack_hint: true,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
@@ -207,7 +155,6 @@ mod tests {
             "footer_shortcuts_context_running",
             FooterProps {
                 mode: FooterMode::ShortcutSummary,
-                esc_backtrack_hint: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: Some(72),
                 context_window_used_tokens: None,
@@ -218,7 +165,6 @@ mod tests {
             "footer_context_tokens_used",
             FooterProps {
                 mode: FooterMode::ShortcutSummary,
-                esc_backtrack_hint: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: Some(123_456),
@@ -229,7 +175,6 @@ mod tests {
             "footer_context_only",
             FooterProps {
                 mode: FooterMode::ContextOnly,
-                esc_backtrack_hint: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,

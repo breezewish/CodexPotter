@@ -391,6 +391,7 @@ pub fn new_patch_apply_failure(stderr: String) -> PlainHistoryCell {
             Some(&CommandOutput {
                 exit_code: 1,
                 aggregated_output: stderr,
+                formatted_output: String::new(),
             }),
             OutputLinesParams {
                 line_limit: TOOL_CALL_MAX_LINES,

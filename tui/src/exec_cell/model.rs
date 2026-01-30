@@ -9,6 +9,8 @@ pub struct CommandOutput {
     pub exit_code: i32,
     /// The aggregated stderr + stdout interleaved.
     pub aggregated_output: String,
+    /// The formatted output of the command, as seen by the model.
+    pub formatted_output: String,
 }
 
 #[derive(Debug, Clone)]
@@ -62,6 +64,10 @@ impl ExecCell {
 
     pub fn animations_enabled(&self) -> bool {
         self.animations_enabled
+    }
+
+    pub fn iter_calls(&self) -> impl Iterator<Item = &ExecCall> {
+        self.calls.iter()
     }
 
     pub(super) fn is_exploring_call(call: &ExecCall) -> bool {

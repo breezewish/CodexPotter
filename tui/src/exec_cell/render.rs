@@ -1,3 +1,4 @@
+use std::time::Duration;
 use std::time::Instant;
 
 use super::model::CommandOutput;
@@ -13,6 +14,7 @@ use crate::render::line_utils::push_owned_lines;
 use crate::shimmer::shimmer_spans;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line;
+use crate::wrapping::word_wrap_lines;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::ExecCommandSource;
 use itertools::Itertools;
@@ -188,6 +190,19 @@ pub fn spinner(start_time: Option<Instant>, animations_enabled: bool) -> Span<'s
     }
 }
 
+fn format_duration(duration: Duration) -> String {
+    let millis = duration.as_millis() as i64;
+    if millis < 1000 {
+        format!("{millis}ms")
+    } else if millis < 60_000 {
+        format!("{:.2}s", millis as f64 / 1000.0)
+    } else {
+        let minutes = millis / 60_000;
+        let seconds = (millis % 60_000) / 1000;
+        format!("{minutes}m {seconds:02}s")
+    }
+}
+
 impl HistoryCell for ExecCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         if self.is_exploring_cell() {
@@ -195,6 +210,54 @@ impl HistoryCell for ExecCell {
         } else {
             self.command_display_lines(width)
         }
+    }
+
+    fn desired_transcript_height(&self, width: u16) -> u16 {
+        self.transcript_lines(width).len() as u16
+    }
+
+    fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut lines: Vec<Line<'static>> = vec![];
+        for (i, call) in self.iter_calls().enumerate() {
+            if i > 0 {
+                lines.push("".into());
+            }
+            let script = strip_bash_lc_and_escape(&call.command);
+            let highlighted_script = highlight_bash_to_lines(&script);
+            let cmd_display = word_wrap_lines(
+                &highlighted_script,
+                RtOptions::new(width as usize)
+                    .initial_indent("$ ".magenta().into())
+                    .subsequent_indent("    ".into()),
+            );
+            lines.extend(cmd_display);
+
+            if let Some(output) = call.output.as_ref() {
+                if !call.is_unified_exec_interaction() {
+                    let wrap_width = width.max(1) as usize;
+                    let wrap_opts = RtOptions::new(wrap_width);
+                    for unwrapped in output.formatted_output.lines().map(ansi_escape_line) {
+                        let wrapped = word_wrap_line(&unwrapped, wrap_opts.clone());
+                        push_owned_lines(&wrapped, &mut lines);
+                    }
+                }
+                let duration = call
+                    .duration
+                    .map(format_duration)
+                    .unwrap_or_else(|| "unknown".to_string());
+                let mut result: Line = if output.exit_code == 0 {
+                    Line::from("✓".green().bold())
+                } else {
+                    Line::from(vec![
+                        "✗".red().bold(),
+                        format!(" ({})", output.exit_code).into(),
+                    ])
+                };
+                result.push_span(format!(" • {duration}").dim());
+                lines.push(result);
+            }
+        }
+        lines
     }
 }
 
@@ -685,6 +748,7 @@ mod tests {
         let output = CommandOutput {
             exit_code: 0,
             aggregated_output,
+            formatted_output: String::new(),
         };
         let width = 20;
         let layout = EXEC_DISPLAY_LAYOUT;

@@ -885,6 +885,7 @@ impl RenderOnlyProcessor {
                     CommandOutput {
                         exit_code: ev.exit_code,
                         aggregated_output,
+                        formatted_output: ev.formatted_output,
                     },
                     ev.duration,
                 );

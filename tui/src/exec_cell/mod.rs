@@ -1,5 +1,6 @@
 mod model;
 mod render;
+mod render_potter;
 
 pub use model::CommandOutput;
 pub use model::ExecCell;

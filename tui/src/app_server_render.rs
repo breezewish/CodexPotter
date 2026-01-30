@@ -72,6 +72,23 @@ fn render_render_only_viewport(
     bottom_pane.render(pane_area, buf);
 }
 
+const PROMPT_PLACEHOLDER_TEXT: &str = "Assign new task to CodexPotter";
+
+fn new_default_bottom_pane(
+    tui: &Tui,
+    app_event_tx: AppEventSender,
+    animations_enabled: bool,
+) -> BottomPane {
+    BottomPane::new(BottomPaneParams {
+        frame_requester: tui.frame_requester(),
+        enhanced_keys_supported: tui.enhanced_keys_supported(),
+        app_event_tx,
+        animations_enabled,
+        placeholder_text: PROMPT_PLACEHOLDER_TEXT.to_string(),
+        disable_paste_burst: false,
+    })
+}
+
 pub async fn prompt_user_with_tui(tui: &mut Tui) -> anyhow::Result<Option<String>> {
     let (app_event_tx_raw, mut app_event_rx) = unbounded_channel::<AppEvent>();
     let app_event_tx = AppEventSender::new(app_event_tx_raw);
@@ -92,14 +109,7 @@ pub async fn prompt_user_with_tui(tui: &mut Tui) -> anyhow::Result<Option<String
         &file_search_dir,
     ));
 
-    let mut bottom_pane = BottomPane::new(BottomPaneParams {
-        frame_requester: tui.frame_requester(),
-        enhanced_keys_supported: tui.enhanced_keys_supported(),
-        app_event_tx: app_event_tx.clone(),
-        animations_enabled: true,
-        placeholder_text: "Assign new task to CodexPotter".to_string(),
-        disable_paste_burst: false,
-    });
+    let mut bottom_pane = new_default_bottom_pane(tui, app_event_tx.clone(), true);
 
     let mut tui_events = tui.event_stream();
     tui.frame_requester().schedule_frame();
@@ -350,14 +360,7 @@ pub async fn run_render_only_with_tui_options_and_queue(
         })
         .map_err(|err| anyhow::Error::msg(err.to_string()))?;
 
-    let mut bottom_pane = BottomPane::new(BottomPaneParams {
-        frame_requester: tui.frame_requester(),
-        enhanced_keys_supported: tui.enhanced_keys_supported(),
-        app_event_tx: app_event_tx.clone(),
-        animations_enabled: true,
-        placeholder_text: "Assign new task to CodexPotter".to_string(),
-        disable_paste_burst: false,
-    });
+    let mut bottom_pane = new_default_bottom_pane(tui, app_event_tx.clone(), true);
     if let Some(draft) = composer_draft.take() {
         bottom_pane.composer_mut().restore_draft(draft);
     }

@@ -239,7 +239,7 @@ impl Renderable for BottomPane {
             return;
         }
 
-        const PROMPT_FOOTER_HEIGHT: u16 = 2;
+        const PROMPT_FOOTER_HEIGHT: u16 = 1;
         let width = area.width;
         let prompt_footer_height = if area.height > PROMPT_FOOTER_HEIGHT {
             PROMPT_FOOTER_HEIGHT
@@ -323,11 +323,11 @@ impl Renderable for BottomPane {
             .unwrap_or(0)
             + self.queued_user_messages.desired_height(width)
             + self.composer.desired_height(width)
-            + 3
+            + 2
     }
 
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        const PROMPT_FOOTER_HEIGHT: u16 = 2;
+        const PROMPT_FOOTER_HEIGHT: u16 = 1;
         let width = area.width;
         let prompt_footer_height = if area.height > PROMPT_FOOTER_HEIGHT {
             PROMPT_FOOTER_HEIGHT
@@ -383,4 +383,42 @@ pub fn render_prompt_footer_for_test(
     override_mode: Option<PromptFooterOverride>,
 ) {
     render_prompt_footer(area, buf, override_mode);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    fn render_last_row(width: u16) -> String {
+        let (tx, _rx) = unbounded_channel::<crate::app_event::AppEvent>();
+        let app_event_tx = AppEventSender::new(tx);
+        let pane = BottomPane::new(BottomPaneParams {
+            frame_requester: FrameRequester::test_dummy(),
+            enhanced_keys_supported: false,
+            app_event_tx,
+            animations_enabled: false,
+            placeholder_text: "Assign new task to CodexPotter".to_string(),
+            disable_paste_burst: false,
+        });
+
+        let height = pane.desired_height(width).max(1);
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+
+        let y = height - 1;
+        let mut row = String::new();
+        for x in 0..width {
+            row.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
+        }
+        row
+    }
+
+    #[test]
+    fn prompt_footer_is_not_followed_by_a_trailing_blank_line() {
+        let row = render_last_row(60);
+        assert_eq!(row.trim(), "ctrl+g external editor");
+    }
 }

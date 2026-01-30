@@ -7,6 +7,16 @@ streaming, etc), powered by an external `codex app-server` process.
 Unlike `codex exec`, this tool does **not** run codex-core directly — it launches an external
 `codex app-server` process and renders the streamed events.
 
+This is developer-facing documentation. Start at `docs/wiki/README.md` for the full code wiki, and
+see `docs/wiki/core-architecture.md` for the end-to-end flow.
+
+## Ownership
+
+- Potter-specific: the `codex-potter` runner lives in `cli/` and owns the multi-round/session
+  orchestration.
+- Upstream-derived dependency: the spawned `codex app-server` process is part of the upstream Codex
+  CLI, and most protocol/event semantics are defined by upstream.
+
 ## Workflow
 
 1. Validates that a `codex` binary is available (via PATH, unless `--codex-bin` is provided).
@@ -14,14 +24,14 @@ Unlike `codex exec`, this tool does **not** run codex-core directly — it launc
 3. Prompts once for your project goal, then creates:
    - `.codexpotter/projects/YYYYMMDD_x/MAIN.md` (progress file)
    - `.codexpotter/kb/` (knowledge base directory)
-4. Runs up to N turns (default 10). Each turn:
-   - starts a fresh `codex app-server`
+4. Runs up to N rounds (default 10). Each round:
+   - starts a fresh `codex app-server` (one app-server thread + one `turn/start`)
    - injects a fixed developer prompt pointing at the progress file
-   - submits a fixed prompt: `Continue working according to the agreed workflow and the progress tracking file.`
+   - submits a fixed prompt: `Continue working according to the WORKFLOW_INSTRUCTIONS`
 5. Stops early for the current project if the progress file front matter contains `potterflag: true`
-   (checked after each turn; queued projects continue normally).
+   (checked after each round; queued projects continue normally).
 
-## Usage
+## CLI interface
 
 ```sh
 codex-potter [OPTIONS]

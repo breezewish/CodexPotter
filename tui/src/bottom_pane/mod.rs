@@ -150,11 +150,10 @@ impl BottomPane {
         self.status_header = header;
         self.status_details = None;
 
-        let header = self.status_header_with_prefix();
-        let details = self.status_details.clone();
         if let Some(status) = self.status.as_mut() {
-            status.update_header(header);
-            status.update_details(details);
+            status.update_header_prefix(self.status_header_prefix.clone());
+            status.update_header(self.status_header.clone());
+            status.update_details(self.status_details.clone());
         }
 
         self.request_redraw();
@@ -168,9 +167,8 @@ impl BottomPane {
 
         self.status_header_prefix = prefix;
 
-        let header = self.status_header_with_prefix();
         if let Some(status) = self.status.as_mut() {
-            status.update_header(header);
+            status.update_header_prefix(self.status_header_prefix.clone());
         }
 
         self.request_redraw();
@@ -184,22 +182,11 @@ impl BottomPane {
         self.prompt_footer_override = override_mode;
     }
 
-    fn status_header_with_prefix(&self) -> String {
-        let Some(prefix) = self.status_header_prefix.as_deref() else {
-            return self.status_header.clone();
-        };
-
-        if self.status_header.is_empty() {
-            prefix.to_string()
-        } else {
-            format!("{prefix} · {}", self.status_header)
-        }
-    }
-
     fn new_status_indicator(&self) -> StatusIndicatorWidget {
         let mut status =
             StatusIndicatorWidget::new(self.frame_requester.clone(), self.animations_enabled);
-        status.update_header(self.status_header_with_prefix());
+        status.update_header_prefix(self.status_header_prefix.clone());
+        status.update_header(self.status_header.clone());
         status.update_details(self.status_details.clone());
         status.set_interrupt_hint_visible(true);
         status.set_context_window_visible(true);

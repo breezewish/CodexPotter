@@ -7,6 +7,7 @@ use std::time::Instant;
 use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -22,6 +23,7 @@ use crate::shimmer::shimmer_spans;
 use crate::text_formatting::capitalize_first;
 use crate::token_format::format_tokens_compact;
 use crate::tui::FrameRequester;
+use crate::ui_colors::secondary_color;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_lines;
 
@@ -31,6 +33,7 @@ const DETAILS_PREFIX: &str = "  └ ";
 pub struct StatusIndicatorWidget {
     /// Animated header text (defaults to "Working").
     header: String,
+    header_prefix: Option<String>,
     details: Option<String>,
     show_interrupt_hint: bool,
     context_window_percent: Option<i64>,
@@ -67,6 +70,7 @@ impl StatusIndicatorWidget {
     pub fn new(frame_requester: FrameRequester, animations_enabled: bool) -> Self {
         Self {
             header: String::from("Working"),
+            header_prefix: None,
             details: None,
             show_interrupt_hint: true,
             context_window_percent: None,
@@ -83,6 +87,10 @@ impl StatusIndicatorWidget {
     /// Update the animated header label (left of the brackets).
     pub fn update_header(&mut self, header: String) {
         self.header = header;
+    }
+
+    pub fn update_header_prefix(&mut self, prefix: Option<String>) {
+        self.header_prefix = prefix.filter(|prefix| !prefix.is_empty());
     }
 
     /// Update the details text shown below the header.
@@ -198,6 +206,15 @@ impl Renderable for StatusIndicatorWidget {
         let mut spans = Vec::with_capacity(5);
         spans.push(spinner(Some(self.last_resume_at), self.animations_enabled));
         spans.push(" ".into());
+        if let Some(prefix) = self.header_prefix.as_deref() {
+            spans.push(Span::styled(
+                prefix.to_string(),
+                Style::default().fg(secondary_color()).bold(),
+            ));
+            if !self.header.is_empty() {
+                spans.push(" · ".dim());
+            }
+        }
         if self.animations_enabled {
             spans.extend(shimmer_spans(&self.header));
         } else if !self.header.is_empty() {
@@ -245,6 +262,7 @@ mod tests {
     use super::*;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::style::Modifier;
     use std::time::Duration;
     use std::time::Instant;
 
@@ -323,6 +341,26 @@ mod tests {
             .draw(|f| w.render(f.area(), f.buffer_mut()))
             .expect("draw");
         insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn round_prefix_uses_secondary_color_and_bold() {
+        let mut widget =
+            StatusIndicatorWidget::new(crate::tui::FrameRequester::test_dummy(), false);
+        widget.update_header_prefix(Some("Round 1/10".to_string()));
+        widget.set_interrupt_hint_visible(false);
+
+        // Freeze time-dependent rendering (elapsed + spinner) to keep the output stable.
+        widget.is_paused = true;
+        widget.elapsed_running = Duration::ZERO;
+
+        let area = Rect::new(0, 0, 80, 1);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+
+        assert_eq!(buf[(2, 0)].symbol(), "R");
+        assert_eq!(buf[(2, 0)].style().fg, Some(secondary_color()));
+        assert!(buf[(2, 0)].style().add_modifier.contains(Modifier::BOLD));
     }
 
     #[test]

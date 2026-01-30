@@ -13,7 +13,8 @@ Recommended reading order (new contributors):
 6. `../cli.md` - `codex-potter` CLI behavior and multi-round control flow.
 7. `tui-design.md` - Render-only TUI behavior: bottom pane, output folding, token usage indicator,
    and status header updates.
-8. `../tui-chat-composer.md` - Bottom-pane input state machine notes (`ChatComposer`).
+8. `file-search.md` - How `@` file search works (session orchestration + popup insertion).
+9. `../tui-chat-composer.md` - Bottom-pane input state machine notes (`ChatComposer`).
 
 ## Documentation conventions
 

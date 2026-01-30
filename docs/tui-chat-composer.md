@@ -6,6 +6,8 @@ This document describes the behavior of the `ChatComposer` bottom-pane input sta
 For the broader render-only TUI design (output folding, token indicator, status header updates),
 see `docs/wiki/tui-design.md`. For the wiki index, see `docs/wiki/README.md`.
 
+For `@` file search (session orchestration + popup insertion), see `docs/wiki/file-search.md`.
+
 ## Ownership
 
 `ChatComposer` is upstream-derived (forked from the upstream Codex TUI) but used in a reduced

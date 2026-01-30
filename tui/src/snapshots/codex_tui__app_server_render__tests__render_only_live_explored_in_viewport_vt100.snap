@@ -15,7 +15,6 @@ expression: terminal.backend().vt100().screen().contents()
 • Working (0s • esc to interrupt) · 100% context left
 
 
-
 › Assign new task to CodexPotter
 
   ctrl+g external editor

@@ -272,12 +272,7 @@ impl Renderable for BottomPane {
             return;
         }
 
-        // Reserve one empty spacer line above the composer.
-        let top_height = height_above_composer.saturating_sub(1);
-        if top_height == 0 {
-            return;
-        }
-        let top_area = Rect::new(area.x, area.y, area.width, top_height);
+        let top_area = Rect::new(area.x, area.y, area.width, height_above_composer);
 
         let status_height = self
             .status
@@ -323,7 +318,7 @@ impl Renderable for BottomPane {
             .unwrap_or(0)
             + self.queued_user_messages.desired_height(width)
             + self.composer.desired_height(width)
-            + 2
+            + 1
     }
 
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {

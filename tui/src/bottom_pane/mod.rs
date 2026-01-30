@@ -188,7 +188,6 @@ impl BottomPane {
         status.update_header_prefix(self.status_header_prefix.clone());
         status.update_header(self.status_header.clone());
         status.update_details(self.status_details.clone());
-        status.set_interrupt_hint_visible(true);
         status.set_context_window_visible(true);
         status.set_context_window_percent(self.context_window_percent);
         status.set_context_window_used_tokens(self.context_window_used_tokens);

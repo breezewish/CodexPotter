@@ -4,7 +4,6 @@
 use std::time::Duration;
 use std::time::Instant;
 
-use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -17,7 +16,6 @@ use ratatui::widgets::WidgetRef;
 use unicode_width::UnicodeWidthStr;
 
 use crate::exec_cell::spinner;
-use crate::key_hint;
 use crate::render::renderable::Renderable;
 use crate::shimmer::shimmer_spans;
 use crate::text_formatting::capitalize_first;
@@ -35,7 +33,6 @@ pub struct StatusIndicatorWidget {
     header: String,
     header_prefix: Option<String>,
     details: Option<String>,
-    show_interrupt_hint: bool,
     context_window_percent: Option<i64>,
     context_window_used_tokens: Option<i64>,
     // Single-turn runners (for example `codex-potter`) may want a context indicator even when the
@@ -72,7 +69,6 @@ impl StatusIndicatorWidget {
             header: String::from("Working"),
             header_prefix: None,
             details: None,
-            show_interrupt_hint: true,
             context_window_percent: None,
             context_window_used_tokens: None,
             show_context_window: false,
@@ -103,10 +99,6 @@ impl StatusIndicatorWidget {
     #[cfg(test)]
     pub fn header(&self) -> &str {
         &self.header
-    }
-
-    pub fn set_interrupt_hint_visible(&mut self, visible: bool) {
-        self.show_interrupt_hint = visible;
     }
 
     pub fn set_context_window_percent(&mut self, percent: Option<i64>) {
@@ -221,15 +213,7 @@ impl Renderable for StatusIndicatorWidget {
             spans.push(self.header.clone().into());
         }
         spans.push(" ".into());
-        if self.show_interrupt_hint {
-            spans.extend(vec![
-                format!("({pretty_elapsed} • ").dim(),
-                key_hint::plain(KeyCode::Esc).into(),
-                " to interrupt)".dim(),
-            ]);
-        } else {
-            spans.push(format!("({pretty_elapsed})").dim());
-        }
+        spans.push(format!("({pretty_elapsed})").dim());
 
         if self.show_context_window {
             spans.push(" · ".dim());
@@ -309,7 +293,6 @@ mod tests {
     #[test]
     fn renders_with_context_window_percent() {
         let mut w = StatusIndicatorWidget::new(crate::tui::FrameRequester::test_dummy(), false);
-        w.set_interrupt_hint_visible(false);
         w.set_context_window_visible(true);
         w.set_context_window_percent(Some(85));
 
@@ -328,7 +311,6 @@ mod tests {
     fn renders_wrapped_details_panama_two_lines() {
         let mut w = StatusIndicatorWidget::new(crate::tui::FrameRequester::test_dummy(), false);
         w.update_details(Some("A man a plan a canal panama".to_string()));
-        w.set_interrupt_hint_visible(false);
 
         // Freeze time-dependent rendering (elapsed + spinner) to keep the snapshot stable.
         w.is_paused = true;
@@ -348,7 +330,6 @@ mod tests {
         let mut widget =
             StatusIndicatorWidget::new(crate::tui::FrameRequester::test_dummy(), false);
         widget.update_header_prefix(Some("Round 1/10".to_string()));
-        widget.set_interrupt_hint_visible(false);
 
         // Freeze time-dependent rendering (elapsed + spinner) to keep the output stable.
         widget.is_paused = true;

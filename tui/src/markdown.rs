@@ -11,7 +11,6 @@ pub fn append_markdown(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use ratatui::text::Line;
 
@@ -32,8 +31,14 @@ mod tests {
         let src = "Before 【F:/x.rs†L1】\nAfter 【F:/x.rs†L3】\n";
         let mut out = Vec::new();
         append_markdown(src, None, &mut out);
-        let rendered = lines_to_strings(&out).join("\n") + "\n";
-        assert_snapshot!("citations_render_as_plain_text", rendered);
+        let rendered = lines_to_strings(&out);
+        assert_eq!(
+            rendered,
+            vec![
+                "Before 【F:/x.rs†L1】".to_string(),
+                "After 【F:/x.rs†L3】".to_string()
+            ]
+        );
     }
 
     #[test]
@@ -42,8 +47,8 @@ mod tests {
         let src = "Before\n\n    code 1\n\nAfter\n";
         let mut out = Vec::new();
         append_markdown(src, None, &mut out);
-        let lines = lines_to_strings(&out).join("\n") + "\n";
-        assert_snapshot!("indented_code_blocks_preserve_leading_whitespace", lines);
+        let lines = lines_to_strings(&out);
+        assert_eq!(lines, vec!["Before", "", "    code 1", "", "After"]);
     }
 
     #[test]
@@ -62,18 +67,18 @@ mod tests {
             .map(|s| s.content.clone())
             .collect::<Vec<_>>()
             .join("");
-        assert_snapshot!("append_markdown_preserves_full_text_line", rendered);
+        assert_eq!(
+            rendered,
+            "Hi! How can I help with codex-rs today? Want me to explore the repo, run tests, or work on a specific change?"
+        );
     }
 
     #[test]
     fn append_markdown_matches_tui_markdown_for_ordered_item() {
         let mut out = Vec::new();
         append_markdown("1. Tight item\n", None, &mut out);
-        let rendered = lines_to_strings(&out).join("\n") + "\n";
-        assert_snapshot!(
-            "append_markdown_matches_tui_markdown_for_ordered_item",
-            rendered
-        );
+        let lines = lines_to_strings(&out);
+        assert_eq!(lines, vec!["1. Tight item".to_string()]);
     }
 
     #[test]

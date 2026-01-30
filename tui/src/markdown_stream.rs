@@ -393,14 +393,14 @@ mod tests {
 
     #[tokio::test]
     async fn utf8_boundary_safety_and_wide_chars() {
-        // Emoji (wide), wide non-ASCII, control char, digit + combining macron sequences
-        let input = "🙂🙂🙂\nあいあい\nA\u{0003}0\u{0304}\n";
+        // Emoji (wide), CJK, control char, digit + combining macron sequences
+        let input = "🙂🙂🙂\n汉字漢字\nA\u{0003}0\u{0304}\n";
         let deltas = vec![
             "🙂",
             "🙂",
-            "🙂\nあ",
-            "いあ",
-            "い\nA",
+            "🙂\n汉",
+            "字漢",
+            "字\nA",
             "\u{0003}",
             "0",
             "\u{0304}",

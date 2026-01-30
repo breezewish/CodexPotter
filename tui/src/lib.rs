@@ -25,6 +25,7 @@ mod markdown;
 mod markdown_render;
 mod markdown_stream;
 mod potter_tui;
+mod prompt_history_store;
 mod render;
 mod shimmer;
 mod startup_banner;

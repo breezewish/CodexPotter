@@ -1,22 +1,55 @@
-use std::io;
-use std::io::Write;
-use std::path::Path;
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
 
-use serde::Deserialize;
-use serde::Serialize;
+use codex_protocol::protocol::Op;
+use codex_protocol::user_input::TextElement;
+
+use crate::app_event::AppEvent;
+use crate::app_event_sender::AppEventSender;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HistoryEntry {
+    pub text: String,
+    pub text_elements: Vec<TextElement>,
+    pub local_image_paths: Vec<PathBuf>,
+}
+
+impl HistoryEntry {
+    fn empty() -> Self {
+        Self {
+            text: String::new(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+        }
+    }
+
+    pub fn from_text(text: String) -> Self {
+        Self {
+            text,
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+        }
+    }
+}
 
 /// State machine that manages shell-style history navigation (Up/Down) inside
 /// the chat composer. This struct is intentionally decoupled from the
 /// rendering widget so the logic remains isolated and easier to test.
 pub struct ChatComposerHistory {
-    entries: Vec<HistoryEntry>,
-    history_path: Option<PathBuf>,
+    /// Identifier of the history log as reported by `SessionConfiguredEvent`.
+    history_log_id: Option<u64>,
+    /// Number of entries already present in the persistent cross-session
+    /// history file when the session started.
+    history_entry_count: usize,
 
-    /// Current cursor within the history entries. `None` indicates the user is
-    /// *not* currently browsing history.
+    /// Messages submitted by the user *during this UI session* (newest at END).
+    local_history: Vec<HistoryEntry>,
+
+    /// Cache of persistent history entries fetched on-demand.
+    fetched_history: HashMap<usize, HistoryEntry>,
+
+    /// Current cursor within the combined (persistent + local) history. `None`
+    /// indicates the user is *not* currently browsing history.
     history_cursor: Option<isize>,
 
     /// The text that was last inserted into the composer as a result of
@@ -27,37 +60,30 @@ pub struct ChatComposerHistory {
 
 impl ChatComposerHistory {
     pub fn new() -> Self {
-        let history_path = resolve_history_path();
-        let (entries, needs_truncate) = history_path
-            .as_deref()
-            .map(load_history_entries)
-            .unwrap_or_default();
-        if needs_truncate && let Some(path) = history_path.as_deref() {
-            let _ = persist_history(path, &entries);
-        }
         Self {
-            entries,
-            history_path,
+            history_log_id: None,
+            history_entry_count: 0,
+            local_history: Vec::new(),
+            fetched_history: HashMap::new(),
             history_cursor: None,
             last_history_text: None,
         }
     }
 
-    #[cfg(test)]
-    pub fn new_with_history_path(history_path: PathBuf) -> Self {
-        let (entries, _) = load_history_entries(&history_path);
-        Self {
-            entries,
-            history_path: Some(history_path),
-            history_cursor: None,
-            last_history_text: None,
-        }
+    /// Update metadata when a new session is configured.
+    pub fn set_metadata(&mut self, log_id: u64, entry_count: usize) {
+        self.history_log_id = Some(log_id);
+        self.history_entry_count = entry_count;
+        self.fetched_history.clear();
+        self.local_history.clear();
+        self.history_cursor = None;
+        self.last_history_text = None;
     }
 
     /// Record a message submitted by the user in the current session so it can
     /// be recalled later.
-    pub fn record_local_submission(&mut self, text: &str) {
-        if text.is_empty() {
+    pub fn record_local_submission(&mut self, entry: HistoryEntry) {
+        if entry.text.is_empty() && entry.local_image_paths.is_empty() {
             return;
         }
 
@@ -65,31 +91,11 @@ impl ChatComposerHistory {
         self.last_history_text = None;
 
         // Avoid inserting a duplicate if identical to the previous entry.
-        if self
-            .entries
-            .last()
-            .is_some_and(|prev| prev.text.as_str() == text)
-        {
+        if self.local_history.last().is_some_and(|prev| prev == &entry) {
             return;
         }
 
-        self.entries.push(HistoryEntry {
-            ts: unix_timestamp_secs(),
-            text: text.to_string(),
-        });
-        if self.entries.len() > MAX_ENTRIES {
-            let drop_count = self.entries.len() - MAX_ENTRIES;
-            self.entries.drain(0..drop_count);
-        }
-
-        if let Some(path) = self.history_path.as_deref()
-            && let Err(err) = persist_history(path, &self.entries)
-        {
-            tracing::warn!(
-                "failed to persist prompt history to {}: {err}",
-                path.display()
-            );
-        }
+        self.local_history.push(entry);
     }
 
     /// Reset navigation tracking so the next Up key resumes from the latest entry.
@@ -101,7 +107,7 @@ impl ChatComposerHistory {
     /// Should Up/Down key presses be interpreted as history navigation given
     /// the current content and cursor position of `textarea`?
     pub fn should_handle_navigation(&self, text: &str, cursor: usize) -> bool {
-        if self.entries.is_empty() {
+        if self.history_entry_count == 0 && self.local_history.is_empty() {
             return false;
         }
 
@@ -121,233 +127,222 @@ impl ChatComposerHistory {
 
     /// Handle <Up>. Returns true when the key was consumed and the caller
     /// should request a redraw.
-    pub fn navigate_up(&mut self, current_text: &str) -> Option<String> {
-        let total_entries = self.entries.len();
+    pub fn navigate_up(&mut self, app_event_tx: &AppEventSender) -> Option<HistoryEntry> {
+        let total_entries = self.history_entry_count + self.local_history.len();
         if total_entries == 0 {
             return None;
         }
 
-        let mut next_idx = match self.history_cursor {
+        let next_idx = match self.history_cursor {
             None => (total_entries as isize) - 1,
             Some(0) => return None, // already at oldest
             Some(idx) => idx - 1,
         };
 
-        while next_idx >= 0 {
-            let entry = self.entries.get(next_idx as usize)?;
-            if entry.text != current_text {
-                self.history_cursor = Some(next_idx);
-                self.last_history_text = Some(entry.text.clone());
-                return Some(entry.text.clone());
-            }
-            if next_idx == 0 {
-                break;
-            }
-            next_idx -= 1;
-        }
-
-        None
+        self.history_cursor = Some(next_idx);
+        self.populate_history_at_index(next_idx as usize, app_event_tx)
     }
 
     /// Handle <Down>.
-    pub fn navigate_down(&mut self, current_text: &str) -> Option<String> {
-        let total_entries = self.entries.len();
+    pub fn navigate_down(&mut self, app_event_tx: &AppEventSender) -> Option<HistoryEntry> {
+        let total_entries = self.history_entry_count + self.local_history.len();
         if total_entries == 0 {
             return None;
         }
 
-        let mut next_idx = match self.history_cursor {
+        let next_idx_opt = match self.history_cursor {
             None => return None, // not browsing
-            Some(idx) if (idx as usize) + 1 >= total_entries => {
+            Some(idx) if (idx as usize) + 1 >= total_entries => None,
+            Some(idx) => Some(idx + 1),
+        };
+
+        match next_idx_opt {
+            Some(idx) => {
+                self.history_cursor = Some(idx);
+                self.populate_history_at_index(idx as usize, app_event_tx)
+            }
+            None => {
                 // Past newest – clear and exit browsing mode.
                 self.history_cursor = None;
                 self.last_history_text = None;
-                return Some(String::new());
+                Some(HistoryEntry::empty())
             }
-            Some(idx) => idx + 1,
-        };
-
-        while (next_idx as usize) < total_entries {
-            let entry = self.entries.get(next_idx as usize)?;
-            if entry.text != current_text {
-                self.history_cursor = Some(next_idx);
-                self.last_history_text = Some(entry.text.clone());
-                return Some(entry.text.clone());
-            }
-            next_idx += 1;
         }
-
-        self.history_cursor = None;
-        self.last_history_text = None;
-        Some(String::new())
     }
-}
 
-const MAX_ENTRIES: usize = 500;
+    /// Integrate a GetHistoryEntryResponse event.
+    pub fn on_entry_response(
+        &mut self,
+        log_id: u64,
+        offset: usize,
+        entry: Option<String>,
+    ) -> Option<HistoryEntry> {
+        if self.history_log_id != Some(log_id) {
+            return None;
+        }
+        let text = entry?;
+        let entry = HistoryEntry::from_text(text);
+        self.fetched_history.insert(offset, entry.clone());
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct HistoryEntry {
-    ts: u64,
-    text: String,
-}
-
-fn unix_timestamp_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
-
-fn resolve_history_path() -> Option<PathBuf> {
-    #[cfg(test)]
-    {
+        if self.history_cursor == Some(offset as isize) {
+            self.last_history_text = Some(entry.text.clone());
+            return Some(entry);
+        }
         None
     }
 
-    #[cfg(not(test))]
-    {
-        let home = dirs::home_dir()?;
-        Some(home.join(".codexpotter").join("history.jsonl"))
-    }
-}
+    // ---------------------------------------------------------------------
+    // Internal helpers
+    // ---------------------------------------------------------------------
 
-fn load_history_entries(path: &Path) -> (Vec<HistoryEntry>, bool) {
-    let contents = match std::fs::read_to_string(path) {
-        Ok(contents) => contents,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return (Vec::new(), false),
-        Err(err) => {
-            tracing::warn!(
-                "failed to read prompt history from {}: {err}",
-                path.display()
-            );
-            return (Vec::new(), false);
+    fn populate_history_at_index(
+        &mut self,
+        global_idx: usize,
+        app_event_tx: &AppEventSender,
+    ) -> Option<HistoryEntry> {
+        if global_idx >= self.history_entry_count {
+            // Local entry.
+            if let Some(entry) = self
+                .local_history
+                .get(global_idx - self.history_entry_count)
+                .cloned()
+            {
+                self.last_history_text = Some(entry.text.clone());
+                return Some(entry);
+            }
+        } else if let Some(entry) = self.fetched_history.get(&global_idx).cloned() {
+            self.last_history_text = Some(entry.text.clone());
+            return Some(entry);
+        } else if let Some(log_id) = self.history_log_id {
+            let op = Op::GetHistoryEntryRequest {
+                offset: global_idx,
+                log_id,
+            };
+            app_event_tx.send(AppEvent::CodexOp(op));
         }
-    };
-
-    let mut out = Vec::new();
-    for line in contents.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let entry: HistoryEntry = match serde_json::from_str(line) {
-            Ok(entry) => entry,
-            Err(_) => continue,
-        };
-        if entry.text.is_empty() {
-            continue;
-        }
-        out.push(entry);
-    }
-
-    if out.len() <= MAX_ENTRIES {
-        return (out, false);
-    }
-
-    let start = out.len() - MAX_ENTRIES;
-    (out.split_off(start), true)
-}
-
-fn persist_history(path: &Path, entries: &[HistoryEntry]) -> io::Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| io::Error::other("history path has no parent directory"))?;
-    std::fs::create_dir_all(parent)?;
-
-    let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
-    for entry in entries {
-        let line = serde_json::to_string(entry).map_err(|err| io::Error::other(err.to_string()))?;
-        writeln!(tmp, "{line}")?;
-    }
-    tmp.flush()?;
-
-    match tmp.persist(path) {
-        Ok(_) => Ok(()),
-        Err(err) => {
-            // On platforms where rename won't overwrite, remove and try again.
-            let _ = std::fs::remove_file(path);
-            err.file.persist(path).map(|_| ()).map_err(|err| err.error)
-        }
+        None
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
+    use tokio::sync::mpsc::unbounded_channel;
 
     #[test]
     fn duplicate_submissions_are_not_recorded() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("history.jsonl");
-        let mut history = ChatComposerHistory::new_with_history_path(path);
+        let mut history = ChatComposerHistory::new();
 
         // Empty submissions are ignored.
-        history.record_local_submission("");
-        assert!(history.entries.is_empty());
+        history.record_local_submission(HistoryEntry::from_text(String::new()));
+        assert_eq!(history.local_history.len(), 0);
 
         // First entry is recorded.
-        history.record_local_submission("hello");
-        assert_eq!(history.entries.len(), 1);
-        assert_eq!(history.entries.last().unwrap().text, "hello");
+        history.record_local_submission(HistoryEntry::from_text("hello".to_string()));
+        assert_eq!(history.local_history.len(), 1);
+        assert_eq!(
+            history.local_history.last().unwrap(),
+            &HistoryEntry::from_text("hello".to_string())
+        );
 
         // Identical consecutive entry is skipped.
-        history.record_local_submission("hello");
-        assert_eq!(history.entries.len(), 1);
+        history.record_local_submission(HistoryEntry::from_text("hello".to_string()));
+        assert_eq!(history.local_history.len(), 1);
 
         // Different entry is recorded.
-        history.record_local_submission("world");
-        assert_eq!(history.entries.len(), 2);
-        assert_eq!(history.entries.last().unwrap().text, "world");
-    }
-
-    #[test]
-    fn navigation_skips_current_text() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("history.jsonl");
-        let mut history = ChatComposerHistory::new_with_history_path(path);
-
-        history.record_local_submission("same");
-        history.record_local_submission("newer");
-        history.record_local_submission("same");
-
-        assert!(history.should_handle_navigation("", 0));
-        assert_eq!(history.navigate_up(""), Some("same".to_string()));
-
-        // When current text already matches the latest history entry, Up should skip it.
-        assert!(history.should_handle_navigation("same", 0));
-        assert_eq!(history.navigate_up("same"), Some("newer".to_string()));
-    }
-
-    #[test]
-    fn persists_and_truncates_to_max_entries() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("history.jsonl");
-
-        {
-            let mut history = ChatComposerHistory::new_with_history_path(path.clone());
-            for idx in 0..(MAX_ENTRIES + 10) {
-                history.record_local_submission(&format!("cmd {idx}"));
-            }
-        }
-
-        let contents = std::fs::read_to_string(&path).expect("read history");
-        let lines: Vec<&str> = contents.lines().collect();
-        assert_eq!(lines.len(), MAX_ENTRIES);
-
-        // Newer entries should be preserved.
-        let last: HistoryEntry = serde_json::from_str(lines.last().unwrap()).expect("decode json");
-        assert_eq!(last.text, format!("cmd {}", MAX_ENTRIES + 9));
-
-        // Oldest entries should have been dropped.
-        let first: HistoryEntry =
-            serde_json::from_str(lines.first().unwrap()).expect("decode json");
-        assert_eq!(first.text, "cmd 10");
-
-        // Reloading should show the persisted latest entry.
-        let mut history = ChatComposerHistory::new_with_history_path(path);
+        history.record_local_submission(HistoryEntry::from_text("world".to_string()));
+        assert_eq!(history.local_history.len(), 2);
         assert_eq!(
-            history.navigate_up(""),
-            Some(format!("cmd {}", MAX_ENTRIES + 9))
+            history.local_history.last().unwrap(),
+            &HistoryEntry::from_text("world".to_string())
+        );
+    }
+
+    #[test]
+    fn navigation_with_async_fetch() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+
+        let mut history = ChatComposerHistory::new();
+        // Pretend there are 3 persistent entries.
+        history.set_metadata(1, 3);
+
+        // First Up should request offset 2 (latest) and await async data.
+        assert!(history.should_handle_navigation("", 0));
+        assert!(history.navigate_up(&tx).is_none()); // don't replace the text yet
+
+        // Verify that an AppEvent::CodexOp with the correct GetHistoryEntryRequest was sent.
+        let event = rx.try_recv().expect("expected AppEvent to be sent");
+        let AppEvent::CodexOp(history_request_1) = event else {
+            panic!("unexpected event variant");
+        };
+        assert_eq!(
+            Op::GetHistoryEntryRequest {
+                log_id: 1,
+                offset: 2
+            },
+            history_request_1
+        );
+
+        // Inject the async response.
+        assert_eq!(
+            Some(HistoryEntry::from_text("latest".to_string())),
+            history.on_entry_response(1, 2, Some("latest".into()))
+        );
+
+        // Next Up should move to offset 1.
+        assert!(history.navigate_up(&tx).is_none()); // don't replace the text yet
+
+        // Verify second CodexOp event for offset 1.
+        let event_2 = rx.try_recv().expect("expected second event");
+        let AppEvent::CodexOp(history_request_2) = event_2 else {
+            panic!("unexpected event variant");
+        };
+        assert_eq!(
+            Op::GetHistoryEntryRequest {
+                log_id: 1,
+                offset: 1
+            },
+            history_request_2
+        );
+
+        assert_eq!(
+            Some(HistoryEntry::from_text("older".to_string())),
+            history.on_entry_response(1, 1, Some("older".into()))
+        );
+    }
+
+    #[test]
+    fn reset_navigation_resets_cursor() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+
+        let mut history = ChatComposerHistory::new();
+        history.set_metadata(1, 3);
+        history
+            .fetched_history
+            .insert(1, HistoryEntry::from_text("command2".to_string()));
+        history
+            .fetched_history
+            .insert(2, HistoryEntry::from_text("command3".to_string()));
+
+        assert_eq!(
+            Some(HistoryEntry::from_text("command3".to_string())),
+            history.navigate_up(&tx)
+        );
+        assert_eq!(
+            Some(HistoryEntry::from_text("command2".to_string())),
+            history.navigate_up(&tx)
+        );
+
+        history.reset_navigation();
+        assert!(history.history_cursor.is_none());
+        assert!(history.last_history_text.is_none());
+
+        assert_eq!(
+            Some(HistoryEntry::from_text("command3".to_string())),
+            history.navigate_up(&tx)
         );
     }
 }

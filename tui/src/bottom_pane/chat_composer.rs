@@ -33,7 +33,7 @@
 //! cursor movement.
 //!
 //! In `codex-potter`, prompt history is persisted to `~/.codexpotter/history.jsonl` (last 500
-//! entries) so drafts cleared with <kbd>Ctrl</kbd>+<kbd>C</kbd> are also recallable.
+//! entries).
 //!
 //! # Non-bracketed Paste Bursts
 //!
@@ -98,6 +98,7 @@ use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::WidgetRef;
 
 use super::chat_composer_history::ChatComposerHistory;
+use super::chat_composer_history::HistoryEntry;
 use super::file_search_popup::FileSearchPopup;
 use super::footer::FooterMode;
 use super::footer::FooterProps;
@@ -410,6 +411,23 @@ impl ChatComposer {
         self.footer_hint_override = items;
     }
 
+    pub fn set_history_metadata(&mut self, log_id: u64, entry_count: usize) {
+        self.history.set_metadata(log_id, entry_count);
+    }
+
+    pub fn on_history_entry_response(
+        &mut self,
+        log_id: u64,
+        offset: usize,
+        entry: Option<String>,
+    ) -> bool {
+        let Some(entry) = self.history.on_entry_response(log_id, offset, entry) else {
+            return false;
+        };
+        self.set_text_content(entry.text);
+        true
+    }
+
     /// Replace the entire composer content with `text` and reset cursor.
     pub fn set_text_content(&mut self, text: String) {
         // Clear any existing content and placeholders first.
@@ -427,7 +445,8 @@ impl ChatComposer {
         let previous = self.textarea.text().to_string();
         self.set_text_content(String::new());
         self.history.reset_navigation();
-        self.history.record_local_submission(&previous);
+        self.history
+            .record_local_submission(HistoryEntry::from_text(previous.clone()));
         Some(previous)
     }
 
@@ -881,9 +900,8 @@ impl ChatComposer {
         if text.is_empty() {
             return None;
         }
-        if !text.is_empty() {
-            self.history.record_local_submission(&text);
-        }
+        self.history
+            .record_local_submission(HistoryEntry::from_text(text.clone()));
         Some(text)
     }
 
@@ -954,18 +972,17 @@ impl ChatComposer {
                     .history
                     .should_handle_navigation(self.textarea.text(), self.textarea.cursor())
                 {
-                    let current_text = self.textarea.text().to_string();
-                    let replace_text = match key_event.code {
-                        KeyCode::Up => self.history.navigate_up(&current_text),
-                        KeyCode::Down => self.history.navigate_down(&current_text),
-                        KeyCode::Char('p') => self.history.navigate_up(&current_text),
-                        KeyCode::Char('n') => self.history.navigate_down(&current_text),
+                    let replace_entry = match key_event.code {
+                        KeyCode::Up => self.history.navigate_up(&self.app_event_tx),
+                        KeyCode::Down => self.history.navigate_down(&self.app_event_tx),
+                        KeyCode::Char('p') => self.history.navigate_up(&self.app_event_tx),
+                        KeyCode::Char('n') => self.history.navigate_down(&self.app_event_tx),
                         _ => unreachable!(),
                     };
-                    if let Some(text) = replace_text {
-                        self.set_text_content(text);
-                        return (InputResult::None, true);
+                    if let Some(entry) = replace_entry {
+                        self.set_text_content(entry.text);
                     }
+                    return (InputResult::None, true);
                 }
                 self.handle_input_basic(key_event)
             }
@@ -1482,6 +1499,10 @@ mod tests {
 
     #[test]
     fn clear_for_ctrl_c_records_cleared_draft() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
         let mut composer = ChatComposer::new(
@@ -1496,10 +1517,11 @@ mod tests {
         assert_eq!(composer.clear_for_ctrl_c(), Some("draft text".to_string()));
         assert!(composer.is_empty());
 
-        assert_eq!(
-            composer.history.navigate_up(""),
-            Some("draft text".to_string())
-        );
+        let (result, needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(result, InputResult::None);
+        assert!(needs_redraw);
+        assert_eq!(composer.current_text(), "draft text");
     }
 
     #[test]

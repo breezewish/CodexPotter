@@ -95,6 +95,7 @@ pub async fn prompt_user_with_tui(tui: &mut Tui) -> anyhow::Result<Option<String
 
     let file_search_dir = std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir());
     let file_search = FileSearchManager::new(file_search_dir.clone(), app_event_tx.clone());
+    let mut prompt_history = crate::prompt_history_store::PromptHistoryStore::new();
 
     let width = tui.terminal.last_known_screen_size.width.max(1);
     let codex_model = crate::codex_config::resolve_codex_model_config(&file_search_dir)?;
@@ -110,6 +111,10 @@ pub async fn prompt_user_with_tui(tui: &mut Tui) -> anyhow::Result<Option<String
     ));
 
     let mut bottom_pane = new_default_bottom_pane(tui, app_event_tx.clone(), true);
+    let (history_log_id, history_entry_count) = prompt_history.metadata();
+    bottom_pane
+        .composer_mut()
+        .set_history_metadata(history_log_id, history_entry_count);
 
     let mut tui_events = tui.event_stream();
     tui.frame_requester().schedule_frame();
@@ -142,6 +147,7 @@ pub async fn prompt_user_with_tui(tui: &mut Tui) -> anyhow::Result<Option<String
                                 tui,
                                 &mut bottom_pane,
                                 &file_search,
+                                &mut prompt_history,
                                 app_event,
                             );
                         }
@@ -192,6 +198,7 @@ pub async fn prompt_user_with_tui(tui: &mut Tui) -> anyhow::Result<Option<String
                                         tui,
                                         &mut bottom_pane,
                                         &file_search,
+                                        &mut prompt_history,
                                         AppEvent::InsertHistoryCell(Box::new(history_cell::new_error_event(
                                             external_editor_integration::MISSING_EDITOR_ERROR.to_string(),
                                         ))),
@@ -202,6 +209,7 @@ pub async fn prompt_user_with_tui(tui: &mut Tui) -> anyhow::Result<Option<String
                                         tui,
                                         &mut bottom_pane,
                                         &file_search,
+                                        &mut prompt_history,
                                         AppEvent::InsertHistoryCell(Box::new(history_cell::new_error_event(format!(
                                             "Failed to open editor: {err}",
                                         )))),
@@ -222,6 +230,7 @@ pub async fn prompt_user_with_tui(tui: &mut Tui) -> anyhow::Result<Option<String
                         }
                         match result {
                             InputResult::Submitted(text) | InputResult::Queued(text) => {
+                                prompt_history.record_submission(&text);
                                 return Ok(Some(text));
                             }
                             _ => {}
@@ -241,7 +250,7 @@ pub async fn prompt_user_with_tui(tui: &mut Tui) -> anyhow::Result<Option<String
                 let Some(app_event) = maybe_app_event else {
                     return Ok(None);
                 };
-                handle_prompt_app_event(tui, &mut bottom_pane, &file_search, app_event);
+                handle_prompt_app_event(tui, &mut bottom_pane, &file_search, &mut prompt_history, app_event);
             }
         }
     }
@@ -251,6 +260,7 @@ fn handle_prompt_app_event(
     tui: &mut Tui,
     bottom_pane: &mut BottomPane,
     file_search: &FileSearchManager,
+    prompt_history: &mut crate::prompt_history_store::PromptHistoryStore,
     app_event: AppEvent,
 ) {
     match app_event {
@@ -264,6 +274,15 @@ fn handle_prompt_app_event(
         AppEvent::InsertHistoryCell(cell) => {
             let width = tui.terminal.last_known_screen_size.width;
             tui.insert_history_lines(cell.display_lines(width));
+        }
+        AppEvent::CodexOp(Op::GetHistoryEntryRequest { offset, log_id }) => {
+            let entry = prompt_history.lookup_text(log_id, offset);
+            if bottom_pane
+                .composer_mut()
+                .on_history_entry_response(log_id, offset, entry)
+            {
+                tui.frame_requester().schedule_frame();
+            }
         }
         _ => {}
     }
@@ -344,6 +363,7 @@ pub async fn run_render_only_with_tui_options_and_queue(
 
     let file_search_dir = std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir());
     let file_search = FileSearchManager::new(file_search_dir, app_event_tx.clone());
+    let prompt_history = crate::prompt_history_store::PromptHistoryStore::new();
 
     let driver = RenderOnlyProcessor::new(app_event_tx.clone());
     if options.render_user_prompt {
@@ -364,12 +384,17 @@ pub async fn run_render_only_with_tui_options_and_queue(
     if let Some(draft) = composer_draft.take() {
         bottom_pane.composer_mut().restore_draft(draft);
     }
+    let (history_log_id, history_entry_count) = prompt_history.metadata();
+    bottom_pane
+        .composer_mut()
+        .set_history_metadata(history_log_id, history_entry_count);
     let queued_user_messages_state = std::mem::take(queued_user_messages);
     let mut app = RenderAppState::new(
         driver,
         app_event_tx.clone(),
         codex_op_tx,
         bottom_pane,
+        prompt_history,
         file_search,
         queued_user_messages_state,
     );
@@ -695,6 +720,7 @@ struct RenderAppState {
     app_event_tx: AppEventSender,
     codex_op_tx: UnboundedSender<Op>,
     bottom_pane: BottomPane,
+    prompt_history: crate::prompt_history_store::PromptHistoryStore,
     file_search: FileSearchManager,
     queued_user_messages: VecDeque<String>,
     reasoning_status: ReasoningStatusTracker,
@@ -710,6 +736,7 @@ impl RenderAppState {
         app_event_tx: AppEventSender,
         codex_op_tx: UnboundedSender<Op>,
         bottom_pane: BottomPane,
+        prompt_history: crate::prompt_history_store::PromptHistoryStore,
         file_search: FileSearchManager,
         queued_user_messages: VecDeque<String>,
     ) -> Self {
@@ -718,6 +745,7 @@ impl RenderAppState {
             app_event_tx,
             codex_op_tx,
             bottom_pane,
+            prompt_history,
             file_search,
             queued_user_messages,
             reasoning_status: ReasoningStatusTracker::new(),
@@ -943,6 +971,7 @@ impl RenderAppState {
 
         match result {
             InputResult::Submitted(text) | InputResult::Queued(text) => {
+                self.prompt_history.record_submission(&text);
                 self.queued_user_messages.push_back(text);
                 self.refresh_queued_user_messages();
                 frame_requester.schedule_frame();
@@ -1132,9 +1161,21 @@ impl RenderAppState {
                     self.bottom_pane.set_task_running(false);
                 }
             }
-            AppEvent::CodexOp(op) => {
-                let _ = self.codex_op_tx.send(op);
-            }
+            AppEvent::CodexOp(op) => match op {
+                Op::GetHistoryEntryRequest { offset, log_id } => {
+                    let entry = self.prompt_history.lookup_text(log_id, offset);
+                    if self
+                        .bottom_pane
+                        .composer_mut()
+                        .on_history_entry_response(log_id, offset, entry)
+                    {
+                        tui.frame_requester().schedule_frame();
+                    }
+                }
+                _ => {
+                    let _ = self.codex_op_tx.send(op);
+                }
+            },
             AppEvent::StartFileSearch(query) => {
                 self.file_search.on_user_query(query);
             }
@@ -1399,6 +1440,7 @@ mod tests {
             app_event_tx,
             op_tx,
             bottom_pane,
+            crate::prompt_history_store::PromptHistoryStore::new(),
             file_search,
             VecDeque::new(),
         );
@@ -1451,6 +1493,7 @@ mod tests {
             app_event_tx,
             op_tx,
             bottom_pane,
+            crate::prompt_history_store::PromptHistoryStore::new(),
             file_search,
             VecDeque::new(),
         );
@@ -1493,6 +1536,7 @@ mod tests {
             app_event_tx,
             op_tx,
             bottom_pane,
+            crate::prompt_history_store::PromptHistoryStore::new(),
             file_search,
             VecDeque::new(),
         );
@@ -1542,6 +1586,7 @@ mod tests {
             app_event_tx,
             op_tx,
             bottom_pane,
+            crate::prompt_history_store::PromptHistoryStore::new(),
             file_search,
             VecDeque::new(),
         );
@@ -2036,6 +2081,7 @@ mod tests {
             app_event_tx,
             codex_op_tx,
             bottom_pane,
+            crate::prompt_history_store::PromptHistoryStore::new(),
             file_search,
             VecDeque::new(),
         );

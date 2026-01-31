@@ -18,6 +18,10 @@
 
 - 📚 **Built-in knowledge base** — Keep a local KB as index so Codex learns project fast in clean contexts.
 
+<p align="center">
+  <img src="./etc/screenshot.png" alt="CodexPotter screenshot" width="80%" />
+</p>
+
 ## ⚡️ Getting started
 
 ```sh

@@ -111,6 +111,7 @@ pub async fn prompt_user_with_tui(
         .composer_mut()
         .set_history_metadata(history_log_id, history_entry_count);
 
+    let mut should_pad_prompt_viewport = !show_startup_banner;
     if show_startup_banner {
         let width = tui.terminal.last_known_screen_size.width.max(1);
         let codex_model = crate::codex_config::resolve_codex_model_config(&file_search_dir)?;
@@ -118,12 +119,14 @@ pub async fn prompt_user_with_tui(
             Some(effort) => format!("{} {effort}", codex_model.model),
             None => codex_model.model,
         };
-        tui.insert_history_lines(crate::startup_banner::build_startup_banner_lines(
+        let banner_lines = crate::startup_banner::build_startup_banner_lines(
             width,
             env!("CARGO_PKG_VERSION"),
             &model_label,
             &file_search_dir,
-        ));
+        );
+        should_pad_prompt_viewport = should_pad_prompt_after_history_insert(&banner_lines);
+        tui.insert_history_lines(banner_lines);
     }
 
     let mut tui_events = tui.event_stream();
@@ -158,11 +161,17 @@ pub async fn prompt_user_with_tui(
                                 &mut bottom_pane,
                                 &file_search,
                                 &mut prompt_history,
+                                &mut should_pad_prompt_viewport,
                                 app_event,
                             );
                         }
 
-                        draw_prompt_bottom_pane(tui, &bottom_pane, width)?;
+                        draw_prompt_bottom_pane(
+                            tui,
+                            &bottom_pane,
+                            width,
+                            should_pad_prompt_viewport,
+                        )?;
                     }
                     TuiEvent::Key(key_event) => {
                         if key_event.kind == crossterm::event::KeyEventKind::Release {
@@ -195,7 +204,12 @@ pub async fn prompt_user_with_tui(
                             }
                             bottom_pane.set_prompt_footer_override(Some(PromptFooterOverride::ExternalEditorHint));
                             let width = tui.terminal.last_known_screen_size.width;
-                            draw_prompt_bottom_pane(tui, &bottom_pane, width)?;
+                            draw_prompt_bottom_pane(
+                                tui,
+                                &bottom_pane,
+                                width,
+                                should_pad_prompt_viewport,
+                            )?;
                             match external_editor_integration::run_external_editor(tui, bottom_pane.composer())
                                 .await
                             {
@@ -209,6 +223,7 @@ pub async fn prompt_user_with_tui(
                                         &mut bottom_pane,
                                         &file_search,
                                         &mut prompt_history,
+                                        &mut should_pad_prompt_viewport,
                                         AppEvent::InsertHistoryCell(Box::new(history_cell::new_error_event(
                                             external_editor_integration::MISSING_EDITOR_ERROR.to_string(),
                                         ))),
@@ -220,6 +235,7 @@ pub async fn prompt_user_with_tui(
                                         &mut bottom_pane,
                                         &file_search,
                                         &mut prompt_history,
+                                        &mut should_pad_prompt_viewport,
                                         AppEvent::InsertHistoryCell(Box::new(history_cell::new_error_event(format!(
                                             "Failed to open editor: {err}",
                                         )))),
@@ -260,7 +276,14 @@ pub async fn prompt_user_with_tui(
                 let Some(app_event) = maybe_app_event else {
                     return Ok(None);
                 };
-                handle_prompt_app_event(tui, &mut bottom_pane, &file_search, &mut prompt_history, app_event);
+                handle_prompt_app_event(
+                    tui,
+                    &mut bottom_pane,
+                    &file_search,
+                    &mut prompt_history,
+                    &mut should_pad_prompt_viewport,
+                    app_event,
+                );
             }
         }
     }
@@ -271,6 +294,7 @@ fn handle_prompt_app_event(
     bottom_pane: &mut BottomPane,
     file_search: &FileSearchManager,
     prompt_history: &mut crate::prompt_history_store::PromptHistoryStore,
+    should_pad_prompt_viewport: &mut bool,
     app_event: AppEvent,
 ) {
     match app_event {
@@ -283,7 +307,13 @@ fn handle_prompt_app_event(
         }
         AppEvent::InsertHistoryCell(cell) => {
             let width = tui.terminal.last_known_screen_size.width;
-            tui.insert_history_lines(cell.display_lines(width));
+            let lines = cell.display_lines(width);
+            if lines.is_empty() {
+                return;
+            }
+            *should_pad_prompt_viewport =
+                *should_pad_prompt_viewport || should_pad_prompt_after_history_insert(&lines);
+            tui.insert_history_lines(lines);
         }
         AppEvent::CodexOp(Op::GetHistoryEntryRequest { offset, log_id }) => {
             let entry = prompt_history.lookup_text(log_id, offset);
@@ -298,16 +328,37 @@ fn handle_prompt_app_event(
     }
 }
 
+fn should_pad_prompt_after_history_insert(lines: &[Line<'_>]) -> bool {
+    let Some(last) = lines.last() else {
+        return false;
+    };
+
+    !last
+        .spans
+        .iter()
+        .all(|span| span.content.as_ref().trim().is_empty())
+}
+
 fn draw_prompt_bottom_pane(
     tui: &mut Tui,
     bottom_pane: &BottomPane,
     width: u16,
+    should_pad_prompt_viewport: bool,
 ) -> anyhow::Result<()> {
-    let viewport_height = bottom_pane.desired_height(width).max(1);
+    let transient_lines = if should_pad_prompt_viewport {
+        vec![Line::from("")]
+    } else {
+        Vec::new()
+    };
+    let transient_height = u16::try_from(transient_lines.len()).unwrap_or(u16::MAX);
+    let viewport_height = bottom_pane
+        .desired_height(width)
+        .max(1)
+        .saturating_add(transient_height);
     tui.draw(viewport_height, |frame| {
         let area = frame.area();
         ratatui::widgets::Clear.render(area, frame.buffer_mut());
-        render_render_only_viewport(area, frame.buffer_mut(), bottom_pane, Vec::new());
+        render_render_only_viewport(area, frame.buffer_mut(), bottom_pane, transient_lines);
 
         let pane_height = bottom_pane
             .desired_height(area.width)
@@ -1765,6 +1816,64 @@ mod tests {
 
         assert_snapshot!(
             "render_only_idle_prompt_is_separated_from_transcript_vt100",
+            terminal.backend().vt100().screen().contents()
+        );
+    }
+
+    #[test]
+    fn prompt_idle_prompt_is_separated_from_transcript_vt100() {
+        let width: u16 = 80;
+
+        let (tx_raw, _rx_app) = unbounded_channel::<AppEvent>();
+        let app_event_tx = AppEventSender::new(tx_raw);
+
+        let bottom_pane = BottomPane::new(BottomPaneParams {
+            frame_requester: crate::tui::FrameRequester::test_dummy(),
+            enhanced_keys_supported: false,
+            app_event_tx,
+            animations_enabled: false,
+            placeholder_text: "Assign new task to CodexPotter".to_string(),
+            disable_paste_burst: false,
+        });
+        let transient_lines = vec![Line::from("")];
+
+        let pane_height = bottom_pane.desired_height(width).max(1);
+        let transient_height = u16::try_from(transient_lines.len()).unwrap_or(u16::MAX);
+        let viewport_height = pane_height.saturating_add(transient_height);
+
+        let history_lines = vec![Line::from("• ok")];
+        let history_height = u16::try_from(history_lines.len()).unwrap_or(u16::MAX);
+        let height = history_height.saturating_add(viewport_height).max(1);
+
+        let backend = VT100Backend::new(width, height);
+        let mut terminal = ratatui::Terminal::new(backend).expect("create terminal");
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                ratatui::widgets::Clear.render(area, frame.buffer_mut());
+
+                let history_height = history_height.min(area.height);
+                let history_area = Rect::new(area.x, area.y, area.width, history_height);
+                let viewport_area = Rect::new(
+                    area.x,
+                    area.y + history_height,
+                    area.width,
+                    area.height.saturating_sub(history_height),
+                );
+
+                ratatui::widgets::Paragraph::new(ratatui::text::Text::from(history_lines))
+                    .render(history_area, frame.buffer_mut());
+                render_render_only_viewport(
+                    viewport_area,
+                    frame.buffer_mut(),
+                    &bottom_pane,
+                    transient_lines,
+                );
+            })
+            .expect("draw");
+
+        assert_snapshot!(
+            "prompt_idle_prompt_is_separated_from_transcript_vt100",
             terminal.backend().vt100().screen().contents()
         );
     }

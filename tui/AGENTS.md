@@ -17,6 +17,7 @@ Unless explicitly documented below, changes should preserve parity.
 - No steer mode (always queue).
 - No image pasting support.
 - Bottom pane footer messages are customized.
+- Better word jump by using ICU4X word segmentations.
 
 ### Message Items
 

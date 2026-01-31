@@ -16,6 +16,10 @@ fn ensure_codex_compat_home(home: &Path) -> anyhow::Result<PathBuf> {
         .with_context(|| format!("create directory {}", codex_home.display()))?;
 
     ensure_symlink(
+        &codex_home.join("AGENTS.md"),
+        &home.join(".codex").join("AGENTS.md"),
+    )?;
+    ensure_symlink(
         &codex_home.join("config.toml"),
         &home.join(".codex").join("config.toml"),
     )?;
@@ -26,6 +30,10 @@ fn ensure_codex_compat_home(home: &Path) -> anyhow::Result<PathBuf> {
     ensure_symlink(
         &codex_home.join("skills"),
         &home.join(".codex").join("skills"),
+    )?;
+    ensure_symlink(
+        &codex_home.join("rules"),
+        &home.join(".codex").join("rules"),
     )?;
 
     Ok(codex_home)

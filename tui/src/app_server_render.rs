@@ -1893,6 +1893,84 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn render_only_inserts_worked_for_separator_before_agent_message_vt100() {
+        let width: u16 = 80;
+        let height: u16 = 16;
+        let backend = VT100Backend::new(width, height);
+        let mut terminal =
+            crate::custom_terminal::Terminal::with_options(backend).expect("create terminal");
+        terminal.set_viewport_area(Rect::new(0, height - 1, width, 1));
+
+        let (mut proc, mut rx) = make_render_only_processor("test prompt");
+
+        let mut has_emitted_history_lines = false;
+        drain_render_history_events(
+            &mut rx,
+            &mut terminal,
+            width,
+            &mut has_emitted_history_lines,
+        );
+
+        // Simulate a successful command: it should coalesce into the "Ran" cell.
+        proc.handle_codex_event(Event {
+            id: "exec-end".into(),
+            msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+                call_id: "exec-1".into(),
+                process_id: None,
+                turn_id: "turn-1".into(),
+                command: vec!["bash".into(), "-lc".into(), "true".into()],
+                cwd: PathBuf::from("project"),
+                parsed_cmd: Vec::new(),
+                source: ExecCommandSource::Agent,
+                interaction_input: None,
+                stdout: String::new(),
+                stderr: String::new(),
+                aggregated_output: String::new(),
+                exit_code: 0,
+                duration: std::time::Duration::from_millis(1200),
+                formatted_output: String::new(),
+            }),
+        });
+
+        // No cells should be emitted yet; the Ran cell is buffered until the next non-exec output.
+        drain_render_history_events(
+            &mut rx,
+            &mut terminal,
+            width,
+            &mut has_emitted_history_lines,
+        );
+
+        // Start agent output; this should flush the buffered Ran cell and insert the separator.
+        proc.current_elapsed_secs = Some(0);
+        proc.handle_codex_event(Event {
+            id: "delta-1".into(),
+            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+                delta: "ok\n".into(),
+            }),
+        });
+
+        drain_render_history_events(
+            &mut rx,
+            &mut terminal,
+            width,
+            &mut has_emitted_history_lines,
+        );
+
+        drive_stream_to_idle(
+            &mut proc,
+            &mut rx,
+            &mut terminal,
+            width,
+            &mut has_emitted_history_lines,
+        );
+
+        assert_snapshot!(
+            "render_only_worked_for_separator_vt100",
+            terminal.backend().vt100().screen().contents()
+        );
+    }
+
     #[test]
     fn render_only_live_explored_renders_in_viewport_and_merges_calls_vt100() {
         let width: u16 = 80;

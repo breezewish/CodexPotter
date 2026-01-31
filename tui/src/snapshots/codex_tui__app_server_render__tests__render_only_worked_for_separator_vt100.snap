@@ -1,0 +1,19 @@
+---
+source: tui/src/app_server_render.rs
+expression: terminal.backend().vt100().screen().contents()
+---
+
+
+
+
+
+
+
+› test prompt
+
+
+• Ran true
+
+─ Worked for 0s ────────────────────────────────────────────────────────────────
+
+• ok

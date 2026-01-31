@@ -13,6 +13,7 @@ const { platform, arch } = process;
 let targetTriple = null;
 switch (platform) {
   case "linux":
+  case "android":
     switch (arch) {
       case "x64":
         targetTriple = "x86_64-unknown-linux-musl";
@@ -40,6 +41,9 @@ switch (platform) {
     switch (arch) {
       case "x64":
         targetTriple = "x86_64-pc-windows-msvc";
+        break;
+      case "arm64":
+        targetTriple = "aarch64-pc-windows-msvc";
         break;
       default:
         break;

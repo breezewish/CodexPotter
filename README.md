@@ -41,7 +41,8 @@ Supported platforms (via prebuilt native binaries):
 
 - macOS: Apple Silicon + Intel
 - Linux: x86_64 + aarch64
-- Windows: x86_64
+- Windows: x86_64 + aarch64 (ARM64)
+- Android: treated as Linux (uses the bundled Linux musl binaries)
 
 ### Build from source
 

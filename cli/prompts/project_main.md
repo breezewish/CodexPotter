@@ -1,7 +1,7 @@
 ---
 status: initial
 finite_incantatem: false
-short_title: ""
+short_title:
 git_commit: "{{GIT_COMMIT}}"
 git_branch: "{{GIT_BRANCH}}"
 ---

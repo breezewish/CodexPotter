@@ -39,7 +39,7 @@ codex-potter --yolo
 
 ## Roadmap
 
-- [ ] Skill popup
+- [x] Skill popup
 - [ ] Resume / project management
 - [ ] Better sandbox support
 - [ ] Interoperability with codex CLI sessions (for follow-up prompts)

@@ -57,8 +57,8 @@ cargo fmt --all -- --check
 # Lints
 cargo clippy --workspace --all-targets --locked -- -D warnings
 
-# Tests (uses the repo's `ci-test` profile for faster CI-style builds)
-cargo test --workspace --locked --profile ci-test
+# Tests (CI uses nextest with retries; install via `cargo install cargo-nextest --locked`)
+cargo nextest run --workspace --locked --cargo-profile ci-test -P ci
 
 # Build
 cargo build --workspace --all-targets --locked

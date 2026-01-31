@@ -217,15 +217,21 @@ jobs:
           "
 
           for artifact_dir in dist/codex-potter-*; do
-            target=\"${artifact_dir##dist/codex-potter-}\"
-            vendor_target_dir=\"${stage_root}/vendor/${target}/codex-potter\"
-            mkdir -p \"${vendor_target_dir}\"
+            target="${artifact_dir##dist/codex-potter-}"
+            vendor_target_dir="${stage_root}/vendor/${target}/codex-potter"
+            mkdir -p "${vendor_target_dir}"
 
-            if [[ \"${target}\" == *windows* ]]; then
-              cp \"${artifact_dir}/codex-potter.exe\" \"${vendor_target_dir}/codex-potter.exe\"
+            if [[ "${target}" == *windows* ]]; then
+              exe_src="$(find "${artifact_dir}" -type f -name 'codex-potter.exe' | head -n 1)"
+              [[ -n "${exe_src}" ]] \
+                || { echo "❌ Missing codex-potter.exe in ${artifact_dir}"; exit 1; }
+              cp "${exe_src}" "${vendor_target_dir}/codex-potter.exe"
             else
-              cp \"${artifact_dir}/codex-potter\" \"${vendor_target_dir}/codex-potter\"
-              chmod +x \"${vendor_target_dir}/codex-potter\"
+              bin_src="$(find "${artifact_dir}" -type f -name 'codex-potter' | head -n 1)"
+              [[ -n "${bin_src}" ]] \
+                || { echo "❌ Missing codex-potter binary in ${artifact_dir}"; exit 1; }
+              cp "${bin_src}" "${vendor_target_dir}/codex-potter"
+              chmod +x "${vendor_target_dir}/codex-potter"
             fi
           done
 
@@ -233,7 +239,7 @@ jobs:
           tarball_name="$(
             cd "${stage_root}" \
               && npm pack --json --pack-destination "${GITHUB_WORKSPACE}/dist/npm" \
-              | node -e \"const fs=require('fs'); const out=JSON.parse(fs.readFileSync(0,'utf8')); process.stdout.write(out[0].filename || out[0].name);\"
+              | node -e "const fs=require('fs'); const out=JSON.parse(fs.readFileSync(0,'utf8')); process.stdout.write(out[0].filename || out[0].name);"
           )"
           mv "dist/npm/${tarball_name}" "dist/npm/codex-potter-npm-${VERSION}.tgz"
 

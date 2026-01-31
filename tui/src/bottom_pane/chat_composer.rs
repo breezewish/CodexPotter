@@ -3,7 +3,7 @@
 //! It is responsible for:
 //!
 //! - Editing the input buffer (a [`TextArea`]), including placeholder "elements" for large pastes.
-//! - Routing keys to the active popup (currently file search).
+//! - Routing keys to the active popup (file search and skills picker).
 //! - Handling submit vs newline on Enter.
 //! - Inserting literal tab characters on Tab (when no popup is visible).
 //! - Turning raw key streams into explicit paste operations on platforms where terminals
@@ -107,6 +107,8 @@ use super::footer::render_footer;
 use super::footer::reset_mode_after_activity;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
+use super::skill_popup::MentionItem;
+use super::skill_popup::SkillPopup;
 use crate::bottom_pane::paste_burst::FlushResult;
 use crate::render::Insets;
 use crate::render::RectExt;
@@ -118,10 +120,12 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::textarea::TextArea;
 use crate::bottom_pane::textarea::TextAreaState;
+use crate::skills_discovery::SkillMetadata;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -156,10 +160,12 @@ pub struct ChatComposer {
     textarea_state: RefCell<TextAreaState>,
     active_popup: ActivePopup,
     app_event_tx: AppEventSender,
+    skills: Vec<SkillMetadata>,
     history: ChatComposerHistory,
     quit_shortcut_expires_at: Option<Instant>,
     quit_shortcut_key: KeyBinding,
     dismissed_file_popup_token: Option<String>,
+    dismissed_skill_popup_token: Option<String>,
     current_file_query: Option<String>,
     pending_pastes: Vec<(String, String)>,
     large_paste_counters: HashMap<usize, usize>,
@@ -181,6 +187,7 @@ pub struct ChatComposer {
 enum ActivePopup {
     None,
     File(FileSearchPopup),
+    Skill(SkillPopup),
 }
 
 const FOOTER_SPACING_HEIGHT: u16 = 0;
@@ -193,15 +200,20 @@ impl ChatComposer {
         placeholder_text: String,
         disable_paste_burst: bool,
     ) -> Self {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let skills = crate::skills_discovery::load_skills(&cwd);
+
         let mut this = Self {
             textarea: TextArea::new(),
             textarea_state: RefCell::new(TextAreaState::default()),
             active_popup: ActivePopup::None,
             app_event_tx,
+            skills,
             history: ChatComposerHistory::new(),
             quit_shortcut_expires_at: None,
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             dismissed_file_popup_token: None,
+            dismissed_skill_popup_token: None,
             current_file_query: None,
             pending_pastes: Vec::new(),
             large_paste_counters: HashMap::new(),
@@ -229,6 +241,7 @@ impl ChatComposer {
         let footer_total_height = footer_hint_height + footer_spacing;
         let popup_constraint = match &self.active_popup {
             ActivePopup::File(popup) => Constraint::Max(popup.calculate_required_height()),
+            ActivePopup::Skill(popup) => Constraint::Max(popup.calculate_required_height()),
             ActivePopup::None => Constraint::Max(footer_total_height),
         };
         let [composer_rect, popup_rect] =
@@ -545,6 +558,7 @@ impl ChatComposer {
 
         let result = match &mut self.active_popup {
             ActivePopup::File(_) => self.handle_key_event_with_file_popup(key_event),
+            ActivePopup::Skill(_) => self.handle_key_event_with_skill_popup(key_event),
             ActivePopup::None => self.handle_key_event_without_popup(key_event),
         };
 
@@ -716,6 +730,77 @@ impl ChatComposer {
         }
     }
 
+    fn handle_key_event_with_skill_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
+        self.footer_mode = reset_mode_after_activity(self.footer_mode);
+
+        let ActivePopup::Skill(popup) = &mut self.active_popup else {
+            unreachable!();
+        };
+
+        let mut selected_mention: Option<String> = None;
+        let mut close_popup = false;
+
+        let result = match key_event {
+            KeyEvent {
+                code: KeyCode::Up, ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('p'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => {
+                popup.move_up();
+                (InputResult::None, true)
+            }
+            KeyEvent {
+                code: KeyCode::Down,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('n'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => {
+                popup.move_down();
+                (InputResult::None, true)
+            }
+            KeyEvent {
+                code: KeyCode::Esc, ..
+            } => {
+                // Hide popup without modifying text, remember token to avoid immediate reopen.
+                if let Some(tok) = self.current_mention_token() {
+                    self.dismissed_skill_popup_token = Some(tok);
+                }
+                self.active_popup = ActivePopup::None;
+                (InputResult::None, true)
+            }
+            KeyEvent {
+                code: KeyCode::Tab, ..
+            }
+            | KeyEvent {
+                code: KeyCode::Enter,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                if let Some(mention) = popup.selected_mention() {
+                    selected_mention = Some(mention.insert_text.clone());
+                }
+                close_popup = true;
+                (InputResult::None, true)
+            }
+            input => self.handle_input_basic(input),
+        };
+
+        if close_popup {
+            if let Some(insert_text) = selected_mention {
+                self.insert_selected_mention(&insert_text);
+            }
+            self.active_popup = ActivePopup::None;
+        }
+
+        result
+    }
+
     /// Extract a token prefixed with `prefix` under the cursor, if any.
     ///
     /// The returned string **does not** include the prefix.
@@ -829,6 +914,10 @@ impl ChatComposer {
         Self::current_prefixed_token(textarea, '@', false)
     }
 
+    fn current_mention_token(&self) -> Option<String> {
+        Self::current_prefixed_token(&self.textarea, '$', true)
+    }
+
     /// Replace the active `@token` (the one under the cursor) with `path`.
     ///
     /// The algorithm mirrors `current_at_token` so replacement works no matter
@@ -868,6 +957,41 @@ impl ChatComposer {
         };
 
         // Replace the slice `[start_idx, end_idx)` with the chosen path and a trailing space.
+        let mut new_text =
+            String::with_capacity(text.len() - (end_idx - start_idx) + inserted.len() + 1);
+        new_text.push_str(&text[..start_idx]);
+        new_text.push_str(&inserted);
+        new_text.push(' ');
+        new_text.push_str(&text[end_idx..]);
+
+        self.textarea.set_text_clearing_elements(&new_text);
+        let new_cursor = start_idx.saturating_add(inserted.len()).saturating_add(1);
+        self.textarea.set_cursor(new_cursor);
+    }
+
+    fn insert_selected_mention(&mut self, insert_text: &str) {
+        let cursor_offset = self.textarea.cursor();
+        let text = self.textarea.text();
+        let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
+
+        let before_cursor = &text[..safe_cursor];
+        let after_cursor = &text[safe_cursor..];
+
+        let start_idx = before_cursor
+            .char_indices()
+            .rfind(|(_, c)| c.is_whitespace())
+            .map(|(idx, c)| idx + c.len_utf8())
+            .unwrap_or(0);
+
+        let end_rel_idx = after_cursor
+            .char_indices()
+            .find(|(_, c)| c.is_whitespace())
+            .map(|(idx, _)| idx)
+            .unwrap_or(after_cursor.len());
+        let end_idx = safe_cursor + end_rel_idx;
+
+        let inserted = insert_text.to_string();
+
         let mut new_text =
             String::with_capacity(text.len() - (end_idx - start_idx) + inserted.len() + 1);
         new_text.push_str(&text[..start_idx]);
@@ -1226,15 +1350,73 @@ impl ChatComposer {
             return;
         }
 
+        let mention_token = self.current_mention_token();
+        if let Some(token) = mention_token {
+            self.sync_skill_popup(token);
+            return;
+        }
+        self.dismissed_skill_popup_token = None;
+
         if let Some(token) = file_token {
             self.sync_file_search_popup(token);
             return;
         }
 
         self.dismissed_file_popup_token = None;
-        if matches!(self.active_popup, ActivePopup::File(_)) {
+        if matches!(
+            self.active_popup,
+            ActivePopup::File(_) | ActivePopup::Skill(_)
+        ) {
             self.active_popup = ActivePopup::None;
         }
+    }
+
+    fn sync_skill_popup(&mut self, query: String) {
+        if self.dismissed_skill_popup_token.as_ref() == Some(&query) {
+            return;
+        }
+
+        let mentions = self.mention_items();
+        if mentions.is_empty() {
+            self.active_popup = ActivePopup::None;
+            return;
+        }
+
+        match &mut self.active_popup {
+            ActivePopup::Skill(popup) => {
+                popup.set_query(&query);
+                popup.set_mentions(mentions);
+            }
+            _ => {
+                let mut popup = SkillPopup::new(mentions);
+                popup.set_query(&query);
+                self.active_popup = ActivePopup::Skill(popup);
+            }
+        }
+    }
+
+    fn mention_items(&self) -> Vec<MentionItem> {
+        let mut mentions = Vec::new();
+
+        for skill in &self.skills {
+            let display_name = skill.display_name().to_string();
+            let description = Some(skill.display_description().to_string());
+            let skill_name = skill.name.clone();
+            let search_terms = if display_name == skill.name {
+                vec![skill_name.clone()]
+            } else {
+                vec![skill_name.clone(), display_name.clone()]
+            };
+
+            mentions.push(MentionItem {
+                display_name,
+                description,
+                insert_text: format!("${skill_name}"),
+                search_terms,
+            });
+        }
+
+        mentions
     }
 
     /// Synchronize file search popup state with the current text in the textarea.
@@ -1309,6 +1491,7 @@ impl Renderable for ChatComposer {
             + match &self.active_popup {
                 ActivePopup::None => footer_total_height,
                 ActivePopup::File(c) => c.calculate_required_height(),
+                ActivePopup::Skill(c) => c.calculate_required_height(),
             }
     }
 
@@ -1316,6 +1499,9 @@ impl Renderable for ChatComposer {
         let [composer_rect, textarea_rect, popup_rect] = self.layout_areas(area);
         match &self.active_popup {
             ActivePopup::File(popup) => {
+                popup.render_ref(popup_rect, buf);
+            }
+            ActivePopup::Skill(popup) => {
                 popup.render_ref(popup_rect, buf);
             }
             ActivePopup::None => {
@@ -1549,6 +1735,80 @@ mod tests {
 
         assert_eq!(result, InputResult::None);
         assert_eq!(composer.current_text(), "a\t");
+    }
+
+    #[test]
+    fn skill_popup_enter_inserts_skill_mention() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Assign new task to CodexPotter".to_string(),
+            false,
+        );
+        composer.skills = vec![crate::skills_discovery::SkillMetadata {
+            name: "my-skill".to_string(),
+            description: "My test skill.".to_string(),
+            short_description: Some("Short!".to_string()),
+            interface: None,
+            path: std::path::PathBuf::from("/tmp/my-skill/SKILL.md"),
+            scope: crate::skills_discovery::SkillScope::User,
+        }];
+
+        composer.set_text_content("$".to_string());
+        assert!(matches!(composer.active_popup, ActivePopup::Skill(_)));
+
+        let (result, needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(result, InputResult::None);
+        assert!(needs_redraw);
+
+        assert_eq!(composer.current_text(), "$my-skill ");
+        assert!(matches!(composer.active_popup, ActivePopup::None));
+    }
+
+    #[test]
+    fn skill_popup_esc_dismisses_without_reopening() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Assign new task to CodexPotter".to_string(),
+            false,
+        );
+        composer.skills = vec![crate::skills_discovery::SkillMetadata {
+            name: "my-skill".to_string(),
+            description: "My test skill.".to_string(),
+            short_description: None,
+            interface: None,
+            path: std::path::PathBuf::from("/tmp/my-skill/SKILL.md"),
+            scope: crate::skills_discovery::SkillScope::User,
+        }];
+
+        composer.set_text_content("$".to_string());
+        assert!(matches!(composer.active_popup, ActivePopup::Skill(_)));
+
+        let (result, needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(result, InputResult::None);
+        assert!(needs_redraw);
+
+        assert!(matches!(composer.active_popup, ActivePopup::None));
+        // Still on the same `$` token; popup stays dismissed.
+        composer.sync_popups();
+        assert!(matches!(composer.active_popup, ActivePopup::None));
     }
 
     #[test]

@@ -12,8 +12,8 @@ Unless explicitly documented below, changes should preserve parity.
 - No `/` command picker popup.
 - No `?` shortcuts overlay (treat `?` as a literal character).
 - `Tab` inserts a literal tab character (`\t`) into the composer.
-- No `$` skills picker.
-- No `Esc`-driven UX (no backtrack priming, no overlays/popups bound to `Esc`).
+- Supports `$` skills picker.
+- No `Esc`-driven UX (no backtrack priming; `Esc` only dismisses popups).
 - No steer mode (always queue).
 - No image pasting support.
 - Bottom pane footer messages are customized.
@@ -34,7 +34,7 @@ Unless explicitly documented below, changes should preserve parity.
 
 - Codex-potter additionally provides a customized banner on startup
 - Unneeded logics and codes in codex TUI are intentionally removed to keep code tidy and focus (codex-potter's TUI is a _subset_ of codex's TUI):
-  - /command picker, `?` shortcuts overlay, /model selection, /resume selection, $skills picker
+  - /command picker, `?` shortcuts overlay, /model selection, /resume selection
   - Rewind (esc)
   - Approval flows
   - Other interactive features not needed in codex-potter

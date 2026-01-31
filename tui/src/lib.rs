@@ -29,6 +29,7 @@ mod potter_tui;
 mod prompt_history_store;
 mod render;
 mod shimmer;
+mod skills_discovery;
 mod startup_banner;
 mod status_indicator_widget;
 mod streaming;

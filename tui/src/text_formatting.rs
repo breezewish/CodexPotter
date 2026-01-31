@@ -1,3 +1,4 @@
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
@@ -10,6 +11,29 @@ pub fn capitalize_first(input: &str) -> String {
             capitalized
         }
         None => String::new(),
+    }
+}
+
+/// Truncate `text` to `max_graphemes` graphemes. Using graphemes to avoid accidentally truncating
+/// in the middle of a multi-codepoint character.
+pub fn truncate_text(text: &str, max_graphemes: usize) -> String {
+    let mut graphemes = text.grapheme_indices(true);
+
+    if let Some((byte_index, _)) = graphemes.nth(max_graphemes) {
+        if max_graphemes >= 3 {
+            let mut truncate_graphemes = text.grapheme_indices(true);
+            if let Some((truncate_byte_index, _)) = truncate_graphemes.nth(max_graphemes - 3) {
+                let truncated = &text[..truncate_byte_index];
+                format!("{truncated}...")
+            } else {
+                text.to_string()
+            }
+        } else {
+            let truncated = &text[..byte_index];
+            truncated.to_string()
+        }
+    } else {
+        text.to_string()
     }
 }
 

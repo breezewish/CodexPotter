@@ -1,0 +1,10 @@
+---
+source: tui/src/bottom_pane/skill_popup.rs
+assertion_line: 307
+expression: terminal.backend()
+---
+"  skill-creator  Create or update a skill         "
+"                                                  "
+"                                                  "
+"                                                  "
+"  Press enter to insert or esc to close           "

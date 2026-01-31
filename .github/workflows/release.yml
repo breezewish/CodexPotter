@@ -24,7 +24,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Validate tag matches Cargo.toml version
+      - name: Validate tag and extract version
         id: version
         shell: bash
         run: |
@@ -36,27 +36,15 @@ jobs:
             || { echo "❌ Tag '${GITHUB_REF_NAME}' doesn't look like a semver tag (vX.Y.Z)"; exit 1; }
 
           tag_ver="${GITHUB_REF_NAME#v}"
-          cargo_ver="$(
-            awk -F'\"' '
-              /^\[workspace\.package\]$/ { in_section = 1; next }
-              in_section && /^version[[:space:]]*=/ { print $2; exit }
-              in_section && /^\[/ { in_section = 0 }
-            ' Cargo.toml
-          )"
-
-          [[ -n "${cargo_ver}" ]] \
-            || { echo "❌ Failed to read workspace.package.version from Cargo.toml"; exit 1; }
-
-          [[ "${tag_ver}" == "${cargo_ver}" ]] \
-            || { echo "❌ Tag version ${tag_ver} ≠ Cargo.toml ${cargo_ver}"; exit 1; }
-
-          echo "✅ Tag and Cargo.toml agree (${tag_ver})"
+          echo "✅ Tag looks valid (${tag_ver})"
           echo "version=${tag_ver}" >> "$GITHUB_OUTPUT"
 
   build:
     needs: tag-check
     name: Build - ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
+    env:
+      CODEX_POTTER_VERSION: ${{ needs.tag-check.outputs.version }}
     timeout-minutes: 60
     permissions:
       contents: read

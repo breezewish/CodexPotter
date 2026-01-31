@@ -13,6 +13,8 @@ use std::num::NonZeroUsize;
 
 use anyhow::Context;
 use chrono::Local;
+use clap::CommandFactory;
+use clap::FromArgMatches;
 use clap::Parser;
 use clap::ValueEnum;
 use codex_protocol::protocol::Event;
@@ -75,9 +77,16 @@ struct Cli {
     dangerously_bypass_approvals_and_sandbox: bool,
 }
 
+fn parse_cli() -> Cli {
+    let matches = Cli::command()
+        .version(codex_tui::CODEX_POTTER_VERSION)
+        .get_matches();
+    Cli::from_arg_matches(&matches).unwrap_or_else(|err| err.exit())
+}
+
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
+    let cli = parse_cli();
     let bypass = cli.dangerously_bypass_approvals_and_sandbox;
     let sandbox = cli.sandbox;
 

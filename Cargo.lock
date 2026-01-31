@@ -251,7 +251,7 @@ checksum = "c3e64b0cc0439b12df2fa678eae89a1c56a529fd067a9115f7827f1fffd22b32"
 
 [[package]]
 name = "codex-file-search"
-version = "0.0.1"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -267,7 +267,7 @@ dependencies = [
 
 [[package]]
 name = "codex-potter-cli"
-version = "0.0.1"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -289,7 +289,7 @@ dependencies = [
 
 [[package]]
 name = "codex-protocol"
-version = "0.0.1"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "icu_decimal",
@@ -308,7 +308,7 @@ dependencies = [
 
 [[package]]
 name = "codex-tui"
-version = "0.0.1"
+version = "0.0.0"
 dependencies = [
  "ansi-to-tui",
  "anyhow",

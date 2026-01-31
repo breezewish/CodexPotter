@@ -121,7 +121,7 @@ pub async fn prompt_user_with_tui(
         };
         let banner_lines = crate::startup_banner::build_startup_banner_lines(
             width,
-            env!("CARGO_PKG_VERSION"),
+            crate::CODEX_POTTER_VERSION,
             &model_label,
             &file_search_dir,
         );

@@ -361,7 +361,7 @@ async fn initialize_app_server(
             client_info: ClientInfo {
                 name: "codex-potter".to_string(),
                 title: Some("codex-potter".to_string()),
-                version: env!("CARGO_PKG_VERSION").to_string(),
+                version: codex_tui::CODEX_POTTER_VERSION.to_string(),
             },
         },
     };

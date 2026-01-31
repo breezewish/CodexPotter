@@ -1,0 +1,3 @@
+[build.env]
+passthrough = ["CODEX_POTTER_VERSION"]
+

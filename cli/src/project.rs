@@ -20,6 +20,7 @@ const PROMPT_TEMPLATE: &str =
 #[derive(Debug, Clone)]
 pub struct ProjectInit {
     pub progress_file_rel: PathBuf,
+    pub git_commit_start: String,
 }
 
 pub fn init_project(
@@ -45,7 +46,14 @@ pub fn init_project(
     std::fs::write(&main_md, main_md_contents)
         .with_context(|| format!("write {}", main_md.display()))?;
 
-    Ok(ProjectInit { progress_file_rel })
+    Ok(ProjectInit {
+        progress_file_rel,
+        git_commit_start: git_commit,
+    })
+}
+
+pub fn resolve_git_commit(workdir: &Path) -> String {
+    git_stdout_trimmed(workdir, &["rev-parse", "HEAD"]).unwrap_or_default()
 }
 
 pub fn render_project_main(user_prompt: &str, git_commit: &str, git_branch: &str) -> String {

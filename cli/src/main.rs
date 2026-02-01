@@ -10,6 +10,7 @@ mod prompt_queue;
 mod startup;
 
 use std::num::NonZeroUsize;
+use std::time::Instant;
 
 use anyhow::Context;
 use chrono::Local;
@@ -157,6 +158,7 @@ async fn main() -> anyhow::Result<()> {
 
         let init = crate::project::init_project(&workdir, &user_prompt, Local::now())
             .context("initialize .codexpotter project")?;
+        let project_started_at = Instant::now();
         let project_dir = init
             .progress_file_rel
             .parent()
@@ -167,10 +169,11 @@ async fn main() -> anyhow::Result<()> {
 
         for round_index in 0..cli.rounds.get() {
             let (op_tx, op_rx) = unbounded_channel::<Op>();
-            let (event_tx, event_rx) = unbounded_channel::<Event>();
+            let (backend_event_tx, mut backend_event_rx) = unbounded_channel::<Event>();
+            let (ui_event_tx, ui_event_rx) = unbounded_channel::<Event>();
             let (fatal_exit_tx, fatal_exit_rx) = unbounded_channel::<String>();
 
-            let potter_event_tx = event_tx.clone();
+            let potter_event_tx = ui_event_tx.clone();
             if round_index == 0 {
                 let _ = potter_event_tx.send(Event {
                     id: "".to_string(),
@@ -192,13 +195,47 @@ async fn main() -> anyhow::Result<()> {
                 },
             });
 
+            let forwarder = {
+                let ui_event_tx = ui_event_tx.clone();
+                let workdir = workdir.clone();
+                let progress_file_rel = init.progress_file_rel.clone();
+                let user_prompt_file = user_prompt_file.clone();
+                let git_commit_start = init.git_commit_start.clone();
+                tokio::spawn(async move {
+                    while let Some(event) = backend_event_rx.recv().await {
+                        if matches!(&event.msg, EventMsg::TurnComplete(_))
+                            && crate::project::progress_file_has_finite_incantatem_true(
+                                &workdir,
+                                &progress_file_rel,
+                            )
+                            .unwrap_or(false)
+                        {
+                            let _ = ui_event_tx.send(Event {
+                                id: "".to_string(),
+                                msg: EventMsg::PotterSessionSucceeded {
+                                    rounds: current_round,
+                                    duration: project_started_at.elapsed(),
+                                    user_prompt_file: user_prompt_file.clone(),
+                                    git_commit_start: git_commit_start.clone(),
+                                    git_commit_end: crate::project::resolve_git_commit(&workdir),
+                                },
+                            });
+                        }
+
+                        if ui_event_tx.send(event).is_err() {
+                            break;
+                        }
+                    }
+                })
+            };
+
             let backend = tokio::spawn(app_server_backend::run_app_server_backend(
                 codex_bin.clone(),
                 Some(developer_prompt.clone()),
                 backend_launch,
                 codex_compat_home.clone(),
                 op_rx,
-                event_tx,
+                backend_event_tx,
                 fatal_exit_tx,
             ));
 
@@ -207,7 +244,7 @@ async fn main() -> anyhow::Result<()> {
                     turn_prompt.clone(),
                     round_index != 0,
                     op_tx,
-                    event_rx,
+                    ui_event_rx,
                     fatal_exit_rx,
                 )
                 .await?;
@@ -215,12 +252,16 @@ async fn main() -> anyhow::Result<()> {
             match &exit_info.exit_reason {
                 ExitReason::UserRequested => {
                     backend.abort();
+                    forwarder.abort();
                     let _ = backend.await;
+                    let _ = forwarder.await;
                     break 'session;
                 }
                 ExitReason::Fatal(_) => {
                     backend.abort();
+                    forwarder.abort();
                     let _ = backend.await;
+                    let _ = forwarder.await;
                     // `std::process::exit` skips destructors, so explicitly drop the UI to restore
                     // terminal state before exiting.
                     drop(ui);
@@ -232,6 +273,7 @@ async fn main() -> anyhow::Result<()> {
             backend
                 .await
                 .context("app-server render backend panicked")??;
+            let _ = forwarder.await;
             if crate::project::progress_file_has_finite_incantatem_true(
                 &workdir,
                 &init.progress_file_rel,

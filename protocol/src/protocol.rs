@@ -122,6 +122,20 @@ pub enum EventMsg {
         total: u32,
     },
 
+    /// `codex-potter` session finished successfully (outside of the app-server protocol).
+    PotterSessionSucceeded {
+        /// Total number of rounds rendered for this CodexPotter project.
+        rounds: u32,
+        /// Total wall time spent across all rounds.
+        duration: Duration,
+        /// User prompt file for this CodexPotter session (e.g. `.codexpotter/projects/.../MAIN.md`).
+        user_prompt_file: PathBuf,
+        /// Git commit before CodexPotter started mutating the workspace (empty when unavailable).
+        git_commit_start: String,
+        /// Git commit after CodexPotter finished (empty when unavailable).
+        git_commit_end: String,
+    },
+
     WebSearchEnd(WebSearchEndEvent),
 
     ExecCommandEnd(ExecCommandEndEvent),

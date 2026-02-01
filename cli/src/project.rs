@@ -38,8 +38,11 @@ pub fn init_project(
         .with_context(|| format!("create {}", projects_root.display()))?;
     std::fs::create_dir_all(&kb_dir).with_context(|| format!("create {}", kb_dir.display()))?;
 
-    let date = now.format("%Y%m%d").to_string();
-    let (project_dir, progress_file_rel) = create_next_project_dir(&projects_root, &date)?;
+    let year = now.format("%Y").to_string();
+    let month = now.format("%m").to_string();
+    let day = now.format("%d").to_string();
+    let (project_dir, progress_file_rel) =
+        create_next_project_dir(&projects_root, &year, &month, &day)?;
 
     let main_md = project_dir.join("MAIN.md");
     let main_md_contents = render_project_main(user_prompt, &git_commit, &git_branch);
@@ -85,10 +88,15 @@ pub fn progress_file_has_finite_incantatem_true(
     Ok(front_matter_bool(&contents, "finite_incantatem").unwrap_or(false))
 }
 
-fn create_next_project_dir(projects_root: &Path, date: &str) -> anyhow::Result<(PathBuf, PathBuf)> {
+fn create_next_project_dir(
+    projects_root: &Path,
+    year: &str,
+    month: &str,
+    day: &str,
+) -> anyhow::Result<(PathBuf, PathBuf)> {
     for idx in 1.. {
-        let name = format!("{date}_{idx}");
-        let project_dir = projects_root.join(&name);
+        let idx = idx.to_string();
+        let project_dir = projects_root.join(year).join(month).join(day).join(&idx);
         if project_dir.exists() {
             continue;
         }
@@ -98,7 +106,10 @@ fn create_next_project_dir(projects_root: &Path, date: &str) -> anyhow::Result<(
 
         let progress_file_rel = PathBuf::from(".codexpotter")
             .join("projects")
-            .join(name)
+            .join(year)
+            .join(month)
+            .join(day)
+            .join(idx)
             .join("MAIN.md");
         return Ok((project_dir, progress_file_rel));
     }
@@ -186,7 +197,7 @@ mod tests {
         let first = init_project(temp.path(), "do something", now).expect("init project");
         assert_eq!(
             first.progress_file_rel,
-            PathBuf::from(".codexpotter/projects/20260127_1/MAIN.md")
+            PathBuf::from(".codexpotter/projects/2026/01/27/1/MAIN.md")
         );
 
         let kb_dir = temp.path().join(".codexpotter/kb");
@@ -204,14 +215,14 @@ mod tests {
         let second = init_project(temp.path(), "do something else", now).expect("init project");
         assert_eq!(
             second.progress_file_rel,
-            PathBuf::from(".codexpotter/projects/20260127_2/MAIN.md")
+            PathBuf::from(".codexpotter/projects/2026/01/27/2/MAIN.md")
         );
 
         let second_main = temp.path().join(&second.progress_file_rel);
         assert!(second_main.exists());
 
         let developer = render_developer_prompt(&second.progress_file_rel);
-        assert!(developer.contains(".codexpotter/projects/20260127_2/MAIN.md"));
+        assert!(developer.contains(".codexpotter/projects/2026/01/27/2/MAIN.md"));
     }
 
     #[test]

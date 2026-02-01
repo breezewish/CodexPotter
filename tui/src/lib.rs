@@ -25,6 +25,7 @@ mod key_hint;
 mod markdown;
 mod markdown_render;
 mod markdown_stream;
+mod potter_stream_recovery;
 mod potter_tui;
 mod prompt_history_store;
 mod render;

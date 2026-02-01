@@ -99,8 +99,9 @@ Terminology used by `codex-potter`:
 
 - **Session**: one user goal (one progress file). Created once per user prompt.
 - **Round**: one `codex app-server` process invocation. A session runs up to `--rounds` rounds.
-- **Turn**: in upstream app-server terms, one `turn/start` call. `codex-potter` runs one turn per
-  round.
+- **Turn**: in upstream app-server terms, one `turn/start` call. `codex-potter` typically runs one
+  turn per round; on retryable stream/network errors it may issue a follow-up `continue` (another
+  `turn/start`) within the same round.
 
 Important implication: a multi-round session does *not* keep a Codex conversation thread alive.
 Durable memory is the progress file and the repository state on disk.
@@ -125,7 +126,7 @@ For each session goal:
 2. Ensure the gitignored knowledge base directory exists.
 3. Render a developer prompt that points to the progress file (`cli/prompts/developer_prompt.md`).
 
-### 3) One round (one turn in a fresh app-server)
+### 3) One round (one app-server process; typically one turn)
 
 For each round:
 

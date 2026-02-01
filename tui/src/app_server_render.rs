@@ -37,6 +37,8 @@ use crate::external_editor_integration;
 use crate::file_search::FileSearchManager;
 use crate::history_cell;
 use crate::history_cell::HistoryCell;
+use crate::potter_stream_recovery::ContinueRetryDecision;
+use crate::potter_stream_recovery::PotterStreamRecovery;
 use crate::render::renderable::Renderable;
 use crate::streaming::controller::StreamController;
 use crate::tui::Tui;
@@ -422,6 +424,16 @@ pub struct RenderOnlyBackendChannels {
     pub fatal_exit_rx: UnboundedReceiver<String>,
 }
 
+fn text_user_input_op(text: String) -> Op {
+    Op::UserInput {
+        items: vec![UserInput::Text {
+            text,
+            text_elements: Vec::new(),
+        }],
+        final_output_json_schema: None,
+    }
+}
+
 pub async fn run_render_only_with_tui_options_and_queue(
     tui: &mut Tui,
     prompt: String,
@@ -449,13 +461,7 @@ pub async fn run_render_only_with_tui_options_and_queue(
     }
 
     codex_op_tx
-        .send(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: prompt,
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-        })
+        .send(text_user_input_op(prompt))
         .map_err(|err| anyhow::Error::msg(err.to_string()))?;
 
     let mut bottom_pane = new_default_bottom_pane(tui, app_event_tx.clone(), true);
@@ -768,6 +774,11 @@ impl RenderOnlyProcessor {
             EventMsg::Error(ev) => {
                 self.flush_pending_exploring_cell();
                 self.flush_pending_success_ran_cell();
+                if let Some(cell) = self.stream.finalize() {
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
+                }
+                self.app_event_tx.send(AppEvent::StopCommitAnimation);
+                self.saw_agent_delta = false;
                 self.needs_final_message_separator = true;
                 self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
                     history_cell::new_error_event(ev.message),
@@ -857,6 +868,7 @@ struct RenderAppState {
     file_search: FileSearchManager,
     queued_user_messages: VecDeque<String>,
     reasoning_status: ReasoningStatusTracker,
+    stream_recovery: PotterStreamRecovery,
     commit_anim_running: Arc<AtomicBool>,
     has_emitted_history_lines: bool,
     exit_after_next_draw: bool,
@@ -882,6 +894,7 @@ impl RenderAppState {
             file_search,
             queued_user_messages,
             reasoning_status: ReasoningStatusTracker::new(),
+            stream_recovery: PotterStreamRecovery::new(),
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             has_emitted_history_lines: false,
             exit_after_next_draw: false,
@@ -1229,6 +1242,8 @@ impl RenderAppState {
                 self.processor.on_commit_tick();
             }
             AppEvent::CodexEvent(event) => {
+                self.stream_recovery.observe_event(&event.msg);
+
                 match &event.msg {
                     EventMsg::PotterRoundStarted { current, total } => {
                         self.bottom_pane
@@ -1273,28 +1288,71 @@ impl RenderAppState {
                     return Ok(());
                 }
 
+                let retry_decision = match &event.msg {
+                    EventMsg::Error(err) => self.stream_recovery.plan_retry(err),
+                    _ => None,
+                };
+                let is_retrying = matches!(&retry_decision, Some(ContinueRetryDecision::Retry(_)));
+
                 let should_stop_footer = matches!(
                     event.msg,
-                    EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_) | EventMsg::Error(_)
-                );
+                    EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_)
+                ) || matches!(event.msg, EventMsg::Error(_))
+                    && !is_retrying;
                 let should_update_context = matches!(
                     event.msg,
                     EventMsg::TokenCount(_) | EventMsg::TurnStarted(_)
                 );
                 let should_redraw_after_event = matches!(event.msg, EventMsg::ExecCommandEnd(_));
 
-                match &event.msg {
-                    EventMsg::TurnComplete(_) => {
+                match (&event.msg, retry_decision) {
+                    (EventMsg::TurnComplete(_), _) => {
                         self.exit_reason = ExitReason::Completed;
                         self.exit_after_next_draw = true;
                         tui.frame_requester().schedule_frame();
                     }
-                    EventMsg::TurnAborted(_) => {
+                    (EventMsg::TurnAborted(_), _) => {
                         self.exit_reason = ExitReason::UserRequested;
                         self.exit_after_next_draw = true;
                         tui.frame_requester().schedule_frame();
                     }
-                    EventMsg::Error(ev) => {
+                    (EventMsg::Error(_), Some(ContinueRetryDecision::Retry(plan))) => {
+                        let header = if plan.backoff.is_zero() {
+                            format!("Retrying (continue {}/{})", plan.attempt, plan.max_attempts)
+                        } else {
+                            format!(
+                                "Retrying in {}s (continue {}/{})",
+                                plan.backoff.as_secs(),
+                                plan.attempt,
+                                plan.max_attempts
+                            )
+                        };
+                        self.bottom_pane.update_status_header(header);
+                        let op = text_user_input_op(String::from("continue"));
+                        if plan.backoff.is_zero() {
+                            let _ = self.codex_op_tx.send(op);
+                        } else {
+                            let op_tx = self.codex_op_tx.clone();
+                            tokio::spawn(async move {
+                                tokio::time::sleep(plan.backoff).await;
+                                let _ = op_tx.send(op);
+                            });
+                        }
+                    }
+                    (
+                        EventMsg::Error(ev),
+                        Some(ContinueRetryDecision::GiveUp { max_attempts, .. }),
+                    ) => {
+                        // The error itself is rendered into the transcript; return a fatal exit
+                        // reason so callers can exit non-zero without duplicating the message.
+                        self.exit_reason = ExitReason::Fatal(format!(
+                            "{} (stream recovery gave up after {max_attempts} retries)",
+                            ev.message
+                        ));
+                        self.exit_after_next_draw = true;
+                        tui.frame_requester().schedule_frame();
+                    }
+                    (EventMsg::Error(ev), None) => {
                         // The error itself is rendered into the transcript; return a fatal exit
                         // reason so callers can exit non-zero without duplicating the message.
                         self.exit_reason = ExitReason::Fatal(ev.message.clone());

@@ -29,6 +29,7 @@ use crate::app_server_protocol::TurnStartResponse;
 use crate::app_server_protocol::UserInput as ApiUserInput;
 use anyhow::Context;
 use codex_protocol::ThreadId;
+use codex_protocol::potter_stream_recovery;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -500,11 +501,16 @@ fn handle_codex_event_notification(
     };
 
     let event: Event = serde_json::from_value(params)?;
-    if matches!(
-        event.msg,
-        EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_) | EventMsg::Error(_)
-    ) {
-        message_state.turn_complete_seen = true;
+    match &event.msg {
+        EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_) => {
+            message_state.turn_complete_seen = true;
+        }
+        EventMsg::Error(err) => {
+            if !potter_stream_recovery::is_retryable_stream_error(err) {
+                message_state.turn_complete_seen = true;
+            }
+        }
+        _ => {}
     }
     let _ = event_tx.send(event);
     Ok(())
@@ -662,6 +668,7 @@ fn next_request_id(next_id: &mut i64) -> RequestId {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_protocol::protocol::CodexErrorInfo;
     use codex_protocol::protocol::TurnCompleteEvent;
     use tokio::sync::mpsc::unbounded_channel;
     use tokio::time::Duration;
@@ -676,6 +683,56 @@ mod tests {
             id: "1".to_string(),
             msg: EventMsg::TurnComplete(TurnCompleteEvent {
                 last_agent_message: Some("ok".to_string()),
+            }),
+        };
+        handle_codex_event_notification(
+            "codex/event/test",
+            Some(serde_json::to_value(event).expect("serialize event")),
+            &event_tx,
+            &mut state,
+        )
+        .expect("handle event");
+
+        assert!(state.turn_complete_seen);
+    }
+
+    #[test]
+    fn retryable_error_does_not_set_turn_complete_seen() {
+        let (event_tx, _event_rx) = unbounded_channel::<Event>();
+        let mut state = BackendMessageState::default();
+
+        let event = Event {
+            id: "1".to_string(),
+            msg: EventMsg::Error(ErrorEvent {
+                message:
+                    "stream disconnected before completion: error sending request for url (...)"
+                        .to_string(),
+                codex_error_info: Some(CodexErrorInfo::ResponseStreamDisconnected {
+                    http_status_code: None,
+                }),
+            }),
+        };
+        handle_codex_event_notification(
+            "codex/event/test",
+            Some(serde_json::to_value(event).expect("serialize event")),
+            &event_tx,
+            &mut state,
+        )
+        .expect("handle event");
+
+        assert!(!state.turn_complete_seen);
+    }
+
+    #[test]
+    fn non_retryable_error_sets_turn_complete_seen() {
+        let (event_tx, _event_rx) = unbounded_channel::<Event>();
+        let mut state = BackendMessageState::default();
+
+        let event = Event {
+            id: "1".to_string(),
+            msg: EventMsg::Error(ErrorEvent {
+                message: "unauthorized".to_string(),
+                codex_error_info: Some(CodexErrorInfo::Unauthorized),
             }),
         };
         handle_codex_event_notification(

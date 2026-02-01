@@ -42,13 +42,17 @@ Both are derived from the CLI flags via `AppServerLaunchConfig::from_cli(...)`:
 
 ## Lifecycle: initialize → thread/start → turn/start
 
-The bridge runs one thread and one turn per round:
+The bridge runs one thread and typically one turn per round:
 
 1. Spawn `codex app-server`.
 2. Initialize the server protocol handshake.
 3. Start a fresh thread (injecting developer instructions).
 4. Start the turn when the UI submits `Op::UserInput`.
 5. Forward streamed events (`codex/event/*`) to the TUI until the turn completes.
+
+Exception: on retryable stream/network errors, the render-only runner may submit an additional
+`Op::UserInput` (a follow-up `continue` prompt), resulting in another `turn/start` within the same
+round/process.
 
 ### 1) Spawn (`codex … app-server`)
 
@@ -128,7 +132,9 @@ Rules:
 - Seeing any of these event messages marks the turn as completed:
   - `EventMsg::TurnComplete`
   - `EventMsg::TurnAborted`
-  - `EventMsg::Error`
+- `EventMsg::Error` is treated as terminal **unless** it is classified as a retryable
+  stream/network error via `codex_protocol::potter_stream_recovery::is_retryable_stream_error(...)`
+  (so the UI can recover by sending a follow-up `continue` without respawning the app-server).
 
 After the turn completes, the bridge closes stdin to request the app-server process exit.
 

@@ -34,6 +34,7 @@ Unless explicitly documented below, changes should preserve parity.
 ### Other differences
 
 - Codex-potter additionally provides a customized banner on startup
+- Codex-potter keeps the current round alive on retryable stream/network errors by automatically sending a follow-up `continue` prompt, with exponential backoff and a retry cap (see `tui/src/potter_stream_recovery.rs` + `protocol/src/potter_stream_recovery.rs`).
 - Unneeded logics and codes in codex TUI are intentionally removed to keep code tidy and focus (codex-potter's TUI is a _subset_ of codex's TUI):
   - /command picker, `?` shortcuts overlay, /model selection, /resume selection
   - Rewind (esc)

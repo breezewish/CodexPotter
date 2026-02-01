@@ -23,7 +23,7 @@ Unless explicitly documented below, changes should preserve parity.
 
 - Reasoning messages are always not renderred.
 - Multiple Ran items with successful execution status are collapsed into one item.
-- Additional CodexPotter items (e.g. project creation hints, round hints).
+- Additional CodexPotter items (e.g. project creation hints, round hints, project-finished summary on success).
 
 ### Shimmer
 

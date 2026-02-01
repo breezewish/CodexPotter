@@ -86,8 +86,8 @@ Key modules:
 
 - `protocol/src/protocol.rs`: `Op`, `Event`, `EventMsg` and their payload structs.
   - Includes potter-only event variants such as `EventMsg::PotterSessionStarted` and
-    `EventMsg::PotterRoundStarted` (these are synthesized by `codex-potter-cli`, not sent by the
-    upstream app-server).
+    `EventMsg::PotterRoundStarted`, and `EventMsg::PotterSessionSucceeded` (these are synthesized
+    by `codex-potter-cli`, not sent by the upstream app-server).
 - `protocol/src/user_input.rs`: typed user input items sent to the agent (text, etc.).
 - `protocol/src/plan_tool.rs`: the `update_plan` tool payload type.
 

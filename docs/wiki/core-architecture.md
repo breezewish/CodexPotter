@@ -60,9 +60,10 @@ Potter-specific additions:
 
 - `EventMsg::PotterSessionStarted`
 - `EventMsg::PotterRoundStarted`
+- `EventMsg::PotterSessionSucceeded`
 
 These markers are synthesized by `cli/src/main.rs` (not emitted by the upstream app-server) so the
-TUI can render session/round boundaries as normal history cells.
+TUI can render session/round boundaries and successful session completion as normal history cells.
 
 ### TUI renderer (crate: `codex-tui`)
 
@@ -133,6 +134,7 @@ For each round:
 1. CLI sends potter-only marker events to the UI stream:
    - `PotterSessionStarted` (only for the first round of a session)
    - `PotterRoundStarted` (for every round)
+   - `PotterSessionSucceeded` (only when the session finishes successfully, i.e. `finite_incantatem: true`)
 2. CLI spawns `codex app-server` and starts the JSON-RPC bridge task
    (`cli/src/app_server_backend.rs`).
 3. Backend performs:

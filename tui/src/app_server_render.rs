@@ -513,6 +513,16 @@ struct RenderOnlyProcessor {
     current_elapsed_secs: Option<u64>,
     pending_exploring_cell: Option<ExecCell>,
     pending_success_ran_cell: Option<ExecCell>,
+    pending_potter_session_succeeded: Option<PendingPotterSessionSucceeded>,
+}
+
+#[derive(Debug)]
+struct PendingPotterSessionSucceeded {
+    rounds: u32,
+    duration: Duration,
+    user_prompt_file: PathBuf,
+    git_commit_start: String,
+    git_commit_end: String,
 }
 
 impl RenderOnlyProcessor {
@@ -532,6 +542,7 @@ impl RenderOnlyProcessor {
             current_elapsed_secs: None,
             pending_exploring_cell: None,
             pending_success_ran_cell: None,
+            pending_potter_session_succeeded: None,
         }
     }
 
@@ -607,6 +618,23 @@ impl RenderOnlyProcessor {
                     crate::history_cell_potter::new_potter_round_started(current, total),
                 )));
             }
+            EventMsg::PotterSessionSucceeded {
+                rounds,
+                duration,
+                user_prompt_file,
+                git_commit_start,
+                git_commit_end,
+            } => {
+                self.flush_pending_exploring_cell();
+                self.flush_pending_success_ran_cell();
+                self.pending_potter_session_succeeded = Some(PendingPotterSessionSucceeded {
+                    rounds,
+                    duration,
+                    user_prompt_file,
+                    git_commit_start,
+                    git_commit_end,
+                });
+            }
             EventMsg::TokenCount(ev) => {
                 if let Some(info) = ev.info {
                     self.token_usage = info.total_token_usage;
@@ -653,6 +681,17 @@ impl RenderOnlyProcessor {
                     self.emit_agent_message(&last);
                 }
                 self.app_event_tx.send(AppEvent::StopCommitAnimation);
+                if let Some(done) = self.pending_potter_session_succeeded.take() {
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        crate::history_cell_potter::new_potter_session_succeeded(
+                            done.rounds,
+                            done.duration,
+                            done.user_prompt_file,
+                            done.git_commit_start,
+                            done.git_commit_end,
+                        ),
+                    )));
+                }
             }
             EventMsg::TurnAborted(_) => {
                 self.flush_pending_exploring_cell();

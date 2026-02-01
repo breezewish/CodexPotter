@@ -85,7 +85,7 @@ Key modules:
 `codex-potter` relies on two kinds of persistence:
 
 1. Per-project state under the *workdir* (the directory where `codex-potter` is launched):
-   - `.codexpotter/projects/YYYYMMDD_N/MAIN.md` (progress file)
+   - `.codexpotter/projects/YYYY/MM/DD/N/MAIN.md` (progress file)
    - a gitignored knowledge base directory (scratchpad for intermediate findings)
 2. Per-user state under the user's home directory:
    - `~/.codexpotter/config.toml`
@@ -123,7 +123,7 @@ Durable memory is the progress file and the repository state on disk.
 
 For each session goal:
 
-1. Create `.codexpotter/projects/YYYYMMDD_N/MAIN.md` from `cli/prompts/project_main.md`.
+1. Create `.codexpotter/projects/YYYY/MM/DD/N/MAIN.md` from `cli/prompts/project_main.md`.
 2. Ensure the gitignored knowledge base directory exists.
 3. Render a developer prompt that points to the progress file (`cli/prompts/developer_prompt.md`).
 

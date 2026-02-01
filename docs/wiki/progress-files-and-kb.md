@@ -12,7 +12,7 @@ This page documents the conventions and how they are used by the runner.
 
 Created by the CLI in the project working directory:
 
-- `.codexpotter/projects/YYYYMMDD_N/MAIN.md`
+- `.codexpotter/projects/YYYY/MM/DD/N/MAIN.md`
 
 The template is embedded in the binary:
 

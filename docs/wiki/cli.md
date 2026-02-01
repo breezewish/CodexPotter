@@ -22,7 +22,7 @@ This is developer-facing documentation. Start at `README.md` for the full code w
 1. Validates that a `codex` binary is available (via PATH, unless `--codex-bin` is provided).
 2. Optionally recommends adding `.codexpotter/` to your global gitignore.
 3. Prompts once for your project goal, then creates:
-   - `.codexpotter/projects/YYYYMMDD_x/MAIN.md` (progress file)
+   - `.codexpotter/projects/YYYY/MM/DD/N/MAIN.md` (progress file)
    - a gitignored knowledge base directory (scratchpad for intermediate findings)
 4. Runs up to N rounds (default 10). Each round:
    - starts a fresh `codex app-server` (one app-server thread + one `turn/start`)

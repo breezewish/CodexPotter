@@ -47,7 +47,7 @@ Key modules (high-level):
 - `cli/src/main.rs`: top-level loop.
   - Creates `codex_tui::CodexPotterTui`.
   - Prompts the user for an initial goal.
-  - Initializes a project under `.codexpotter/projects/YYYYMMDD_N/MAIN.md` and ensures a
+  - Initializes a project under `.codexpotter/projects/YYYY/MM/DD/N/MAIN.md` and ensures a
     gitignored knowledge base directory exists for intermediate notes.
   - Runs up to `--rounds N`; each round starts a fresh `codex app-server` and renders a single
     "turn".

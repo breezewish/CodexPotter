@@ -93,6 +93,7 @@ fn new_default_bottom_pane(
 pub async fn prompt_user_with_tui(
     tui: &mut Tui,
     show_startup_banner: bool,
+    check_for_update_on_startup: bool,
     composer_draft: Option<ChatComposerDraft>,
 ) -> anyhow::Result<Option<String>> {
     let (app_event_tx_raw, mut app_event_rx) = unbounded_channel::<AppEvent>();
@@ -127,6 +128,22 @@ pub async fn prompt_user_with_tui(
         );
         should_pad_prompt_viewport = should_pad_prompt_after_history_insert(&banner_lines);
         tui.insert_history_lines(banner_lines);
+
+        if check_for_update_on_startup
+            && let Some(latest_version) = crate::updates::get_upgrade_version()
+        {
+            let width = tui.terminal.last_known_screen_size.width.max(1);
+            let lines = crate::history_cell::UpdateAvailableHistoryCell::new(
+                latest_version,
+                crate::update_action::get_update_action(),
+            )
+            .display_lines(width);
+            if !lines.is_empty() {
+                should_pad_prompt_viewport =
+                    should_pad_prompt_viewport || should_pad_prompt_after_history_insert(&lines);
+                tui.insert_history_lines(lines);
+            }
+        }
     }
 
     let mut tui_events = tui.event_stream();

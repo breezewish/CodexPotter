@@ -41,6 +41,9 @@ mod token_format;
 mod tui;
 mod ui_colors;
 mod ui_consts;
+mod update_action;
+mod update_prompt;
+mod updates;
 mod version;
 mod wrapping;
 
@@ -52,6 +55,7 @@ pub use exit::ExitReason;
 pub use global_gitignore_prompt::GlobalGitignorePromptOutcome;
 pub use global_gitignore_prompt::run_global_gitignore_prompt;
 pub use potter_tui::CodexPotterTui;
+pub use update_action::UpdateAction;
 pub use version::CODEX_POTTER_VERSION;
 
 pub use markdown_render::render_markdown_text;

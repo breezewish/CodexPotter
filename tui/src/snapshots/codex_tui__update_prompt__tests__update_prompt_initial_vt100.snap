@@ -1,0 +1,14 @@
+---
+source: tui/src/update_prompt.rs
+expression: terminal.backend().vt100().screen().contents()
+---
+
+  ✨ Update available! 0.0.0 -> 9.9.9
+
+  Release notes: https://github.com/breezewish/CodexPotter/releases/latest
+
+  › 1. Update now (runs `npm install -g codex-potter`)
+    2. Skip
+    3. Skip until next version
+
+  Press enter to continue

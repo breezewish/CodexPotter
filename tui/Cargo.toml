@@ -17,6 +17,7 @@ workspace = true
 [dependencies]
 ansi-to-tui = { workspace = true }
 anyhow = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
 codex-file-search = { workspace = true }
 codex-protocol = { workspace = true }
 color-eyre = { workspace = true }
@@ -34,6 +35,7 @@ ratatui = { workspace = true, features = [
     "unstable-rendered-line-info",
     "unstable-widget-ref",
 ] }
+reqwest = { workspace = true }
 shlex = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
@@ -71,7 +73,6 @@ winsplit = "0.1"
 
 
 [dev-dependencies]
-chrono = { workspace = true }
 insta = { workspace = true }
 pretty_assertions = { workspace = true }
 rand = { workspace = true }

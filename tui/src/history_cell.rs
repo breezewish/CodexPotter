@@ -19,6 +19,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use unicode_width::UnicodeWidthStr;
 
+use crate::CODEX_POTTER_VERSION;
 use crate::diff_render::create_diff_summary;
 use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
@@ -31,6 +32,7 @@ use crate::render::renderable::Renderable;
 use crate::style::user_message_style;
 use crate::ui_colors::secondary_color;
 use crate::ui_consts::LIVE_PREFIX_COLS;
+use crate::update_action::UpdateAction;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_lines;
 
@@ -181,6 +183,74 @@ impl HistoryCell for PlainHistoryCell {
     }
 }
 
+#[cfg_attr(debug_assertions, allow(dead_code))]
+#[derive(Debug)]
+pub struct UpdateAvailableHistoryCell {
+    latest_version: String,
+    update_action: Option<UpdateAction>,
+}
+
+#[cfg_attr(debug_assertions, allow(dead_code))]
+impl UpdateAvailableHistoryCell {
+    pub fn new(latest_version: String, update_action: Option<UpdateAction>) -> Self {
+        Self {
+            latest_version,
+            update_action,
+        }
+    }
+}
+
+impl HistoryCell for UpdateAvailableHistoryCell {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        let update_instruction = if let Some(update_action) = self.update_action {
+            Line::from(vec![
+                "Run ".into(),
+                Span::styled(
+                    update_action.command_str(),
+                    Style::default().cyan().add_modifier(Modifier::BOLD),
+                ),
+                " to update.".into(),
+            ])
+        } else {
+            Line::from(vec![
+                "See ".into(),
+                Span::styled(
+                    "https://github.com/breezewish/CodexPotter",
+                    Style::default().cyan().underlined(),
+                ),
+                " for installation options.".into(),
+            ])
+        };
+
+        let content = vec![
+            Line::from(vec![
+                Span::styled(
+                    padded_emoji("✨"),
+                    Style::default().cyan().add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    "Update available!",
+                    Style::default().cyan().add_modifier(Modifier::BOLD),
+                ),
+                " ".into(),
+                Span::styled(
+                    format!("{CODEX_POTTER_VERSION} -> {}", self.latest_version),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+            ]),
+            update_instruction,
+            "".into(),
+            "See full release notes:".into(),
+            Line::from(vec![Span::styled(
+                "https://github.com/breezewish/CodexPotter/releases/latest",
+                Style::default().cyan().underlined(),
+            )]),
+        ];
+
+        with_border(content)
+    }
+}
+
 #[derive(Debug)]
 pub struct PrefixedWrappedHistoryCell {
     text: Text<'static>,
@@ -200,6 +270,55 @@ impl PrefixedWrappedHistoryCell {
             subsequent_prefix: subsequent_prefix.into(),
         }
     }
+}
+
+/// Render `lines` inside a border sized to the widest span in the content.
+pub(crate) fn with_border(lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
+    with_border_internal(lines)
+}
+
+fn with_border_internal(lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
+    let max_line_width = lines
+        .iter()
+        .map(|line| {
+            line.iter()
+                .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+                .sum::<usize>()
+        })
+        .max()
+        .unwrap_or(0);
+    let content_width = max_line_width;
+
+    let mut out = Vec::with_capacity(lines.len() + 2);
+    let border_inner_width = content_width + 2;
+    out.push(vec![format!("╭{}╮", "─".repeat(border_inner_width)).dim()].into());
+
+    for line in lines.into_iter() {
+        let used_width: usize = line
+            .iter()
+            .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+            .sum();
+        let span_count = line.spans.len();
+        let mut spans: Vec<Span<'static>> = Vec::with_capacity(span_count + 4);
+        spans.push(Span::from("│ ").dim());
+        spans.extend(line.into_iter());
+        if used_width < content_width {
+            spans.push(Span::from(" ".repeat(content_width - used_width)).dim());
+        }
+        spans.push(Span::from(" │").dim());
+        out.push(Line::from(spans));
+    }
+
+    out.push(vec![format!("╰{}╯", "─".repeat(border_inner_width)).dim()].into());
+
+    out
+}
+
+/// Return the emoji followed by a hair space (U+200A).
+/// Using only the hair space avoids excessive padding after the emoji while
+/// still providing a small visual gap across terminals.
+pub(crate) fn padded_emoji(emoji: &str) -> String {
+    format!("{emoji}\u{200A}")
 }
 
 impl HistoryCell for PrefixedWrappedHistoryCell {

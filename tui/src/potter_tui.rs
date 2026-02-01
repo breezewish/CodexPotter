@@ -17,6 +17,7 @@ pub struct CodexPotterTui {
     turns_rendered: bool,
     queued_user_prompts: VecDeque<String>,
     composer_draft: Option<crate::bottom_pane::ChatComposerDraft>,
+    check_for_update_on_startup: bool,
 }
 
 impl CodexPotterTui {
@@ -29,6 +30,38 @@ impl CodexPotterTui {
             turns_rendered: false,
             queued_user_prompts: VecDeque::new(),
             composer_draft: None,
+            check_for_update_on_startup: true,
+        })
+    }
+
+    /// Enable/disable update checks and update prompts on startup.
+    ///
+    /// When disabled, CodexPotter will not check for updates and will suppress the update prompt
+    /// and update-available banner.
+    pub fn set_check_for_update_on_startup(&mut self, enabled: bool) {
+        self.check_for_update_on_startup = enabled;
+    }
+
+    /// Show the "update available" modal, if applicable.
+    ///
+    /// Returns `Some(action)` when the user chooses "Update now", so the caller can run the
+    /// update command after restoring terminal state.
+    pub async fn prompt_update_if_needed(&mut self) -> anyhow::Result<Option<crate::UpdateAction>> {
+        if !self.check_for_update_on_startup {
+            return Ok(None);
+        }
+
+        let result = crate::update_prompt::run_update_prompt_if_needed(&mut self.tui).await?;
+
+        // Drop and recreate the underlying crossterm EventStream so any buffered input from the
+        // prompt can't leak into the next screen (e.g. the global gitignore prompt / composer).
+        self.tui.pause_events();
+        tui::flush_terminal_input_buffer();
+        self.tui.resume_events();
+
+        Ok(match result {
+            crate::update_prompt::UpdatePromptOutcome::Continue => None,
+            crate::update_prompt::UpdatePromptOutcome::RunUpdate(action) => Some(action),
         })
     }
 
@@ -66,6 +99,7 @@ impl CodexPotterTui {
         crate::app_server_render::prompt_user_with_tui(
             &mut self.tui,
             show_startup_banner,
+            self.check_for_update_on_startup,
             composer_draft,
         )
         .await

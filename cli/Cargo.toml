@@ -14,13 +14,11 @@ anyhow.workspace = true
 clap = { workspace = true, features = ["derive", "env"] }
 codex-protocol.workspace = true
 codex-tui.workspace = true
-chrono = { workspace = true, features = ["serde"] }
+chrono.workspace = true
 dirs.workspace = true
 ignore.workspace = true
-reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-shlex.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = [
     "io-util",
@@ -31,7 +29,6 @@ tokio = { workspace = true, features = [
     "time",
 ] }
 toml_edit.workspace = true
-tracing.workspace = true
 which.workspace = true
 
 [dev-dependencies]

@@ -8,8 +8,6 @@ mod path_utils;
 mod project;
 mod prompt_queue;
 mod startup;
-mod update_action;
-mod updates;
 
 use std::num::NonZeroUsize;
 
@@ -92,6 +90,10 @@ async fn main() -> anyhow::Result<()> {
     let bypass = cli.dangerously_bypass_approvals_and_sandbox;
     let sandbox = cli.sandbox;
 
+    let check_for_update_on_startup = crate::config::ConfigStore::new_default()
+        .and_then(|store| store.check_for_update_on_startup())
+        .unwrap_or(true);
+
     let codex_bin = match startup::resolve_codex_bin(&cli.codex_bin) {
         Ok(resolved) => resolved.command_for_spawn,
         Err(err) => {
@@ -110,8 +112,16 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    let global_gitignore_prompt_plan = prepare_global_gitignore_prompt(&workdir);
     let mut ui = codex_tui::CodexPotterTui::new()?;
+
+    ui.set_check_for_update_on_startup(check_for_update_on_startup);
+    if let Some(update_action) = ui.prompt_update_if_needed().await? {
+        drop(ui);
+        run_update_action(update_action)?;
+        return Ok(());
+    }
+
+    let global_gitignore_prompt_plan = prepare_global_gitignore_prompt(&workdir);
     if let Some(plan) = global_gitignore_prompt_plan {
         maybe_prompt_global_gitignore(&mut ui, &workdir, plan).await;
     }
@@ -233,6 +243,34 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    Ok(())
+}
+
+fn run_update_action(action: codex_tui::UpdateAction) -> anyhow::Result<()> {
+    println!();
+    let cmd_str = action.command_str();
+    println!("Updating CodexPotter via `{cmd_str}`...");
+
+    let status = {
+        #[cfg(windows)]
+        {
+            // On Windows, run via cmd.exe so .CMD/.BAT are correctly resolved (PATHEXT semantics).
+            std::process::Command::new("cmd")
+                .args(["/C", &cmd_str])
+                .status()?
+        }
+        #[cfg(not(windows))]
+        {
+            let (cmd, args) = action.command_args();
+            std::process::Command::new(cmd).args(args).status()?
+        }
+    };
+
+    if !status.success() {
+        anyhow::bail!("`{cmd_str}` failed with status {status}");
+    }
+
+    println!("Update ran successfully! Please restart CodexPotter.");
     Ok(())
 }
 

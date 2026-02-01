@@ -57,7 +57,7 @@ codex-potter --yolo
 - [ ] Interoperability with codex CLI sessions (for follow-up prompts)
 - [ ] Allow opting out knowledge base
 - [ ] Recommended skills for PRD and code review
-- [ ] Better handling of stream disconnect / similar network issues
+- [x] Better handling of stream disconnect / similar network issues
 
 &ensp;
 

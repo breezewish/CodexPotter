@@ -8,6 +8,8 @@ mod path_utils;
 mod project;
 mod prompt_queue;
 mod startup;
+mod update_action;
+mod updates;
 
 use std::num::NonZeroUsize;
 

@@ -47,6 +47,24 @@ impl ConfigStore {
         Ok(read_notice_hide_gitignore_prompt(&doc).unwrap_or(false))
     }
 
+    /// When `true`, checks for CodexPotter updates on startup and surfaces update prompts.
+    ///
+    /// Defaults to `true`.
+    pub fn check_for_update_on_startup(&self) -> anyhow::Result<bool> {
+        let Some(content) = read_document_string(&self.path)? else {
+            return Ok(true);
+        };
+
+        let doc = match content.parse::<DocumentMut>() {
+            Ok(doc) => doc,
+            Err(_) => {
+                return Ok(parse_check_for_update_on_startup_fallback(&content).unwrap_or(true));
+            }
+        };
+
+        Ok(read_check_for_update_on_startup(&doc).unwrap_or(true))
+    }
+
     pub fn set_notice_hide_gitignore_prompt(&self, hide: bool) -> anyhow::Result<()> {
         let content = match read_document_string(&self.path) {
             Ok(Some(existing)) => existing,
@@ -85,9 +103,40 @@ fn read_notice_hide_gitignore_prompt(doc: &DocumentMut) -> Option<bool> {
         .and_then(|v| v.as_bool())
 }
 
+fn read_check_for_update_on_startup(doc: &DocumentMut) -> Option<bool> {
+    doc.get("check_for_update_on_startup")
+        .and_then(TomlItem::as_value)
+        .and_then(|v| v.as_bool())
+}
+
 fn set_notice_hide_gitignore_prompt(doc: &mut DocumentMut, hide: bool) {
     let notice = ensure_table_for_write(doc, "notice");
     notice["hide_gitignore_prompt"] = value(hide);
+}
+
+fn parse_check_for_update_on_startup_fallback(contents: &str) -> Option<bool> {
+    for line in contents.lines() {
+        let trimmed = line.trim_start();
+        let Some(line) = strip_toml_comment(trimmed) else {
+            continue;
+        };
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if key.trim() != "check_for_update_on_startup" {
+            continue;
+        }
+
+        let token = value.split_whitespace().next().unwrap_or_default();
+        if token == "true" {
+            return Some(true);
+        }
+        if token == "false" {
+            return Some(false);
+        }
+    }
+
+    None
 }
 
 fn parse_notice_hide_gitignore_prompt_fallback(contents: &str) -> Option<bool> {
@@ -236,6 +285,33 @@ hide_gitignore_prompt = true # keep me
 
         let store = ConfigStore::new(path);
         assert!(store.notice_hide_gitignore_prompt().expect("read flag"));
+    }
+
+    #[test]
+    fn update_checks_default_to_true() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.toml");
+        let store = ConfigStore::new(path);
+        assert!(store.check_for_update_on_startup().expect("read flag"));
+    }
+
+    #[test]
+    fn reads_update_flag_when_toml_is_invalid() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            r#"# broken table header makes this TOML invalid
+[other
+key = 1
+
+check_for_update_on_startup = false # keep me
+"#,
+        )
+        .expect("write config");
+
+        let store = ConfigStore::new(path);
+        assert!(!store.check_for_update_on_startup().expect("read flag"));
     }
 
     #[test]

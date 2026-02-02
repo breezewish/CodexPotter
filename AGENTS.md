@@ -41,7 +41,7 @@ The rules below are some typical principles. They are not exhaustive, and you mu
 - When writing tests, prefer comparing the equality of entire objects over fields one by one.
 - Always use English for code, comments, commit messages, PR titles/descriptions, and documentation.
 - `tui/` module must only contain pure UI rendering logic. Business logic must not be placed there.
-- When working with `tui/`, follow `tui/AGENTS.md` strictly.
+- IMPORTANT: When working with `tui/`, must follow conventions in `tui/AGENTS.md` strictly.
 - Run `cargo fmt` and `cargo clippy` before committing code.
 
 ## Tests

@@ -34,7 +34,7 @@ Unless explicitly documented below, changes should preserve parity.
 ### Other differences
 
 - Codex-potter additionally provides a customized banner on startup
-- Codex-potter keeps the current round alive on retryable stream/network errors by automatically sending a follow-up `continue` prompt, with exponential backoff and a retry cap (see `tui/src/potter_stream_recovery.rs` + `protocol/src/potter_stream_recovery.rs`).
+- Codex-potter auto retry on stream/network errors.
 - Unneeded logics and codes in codex TUI are intentionally removed to keep code tidy and focus (codex-potter's TUI is a _subset_ of codex's TUI):
   - /command picker, `?` shortcuts overlay, /model selection, /resume selection
   - Rewind (esc)
@@ -48,7 +48,7 @@ Unless explicitly documented below, changes should preserve parity.
 
 - Test: Always use snapshot tests (without ASCII escape sequences) for TUI rendering tests, so that it is visually clear what the output looks like, unless the test or code comes from upstream codex where non-snapshot tests are used, in which case you must preserve parity.
 
-- Isolate divergent code paths: Prefer to use a new file to isolate changed logic from upstream codex, and keep the original file as a subset of the upstream's file, if the changed logic is significant. In this way, we can easily learn what has changed from upstream, and reduce merge conflicts when syncing from upstream.
+- IMPORTANT: Isolate divergent code paths: Prefer to use a new file to isolate changed logic from upstream codex, and keep the original file as a subset of the upstream's file, if the changed logic is significant. In this way, we can easily learn what has changed from upstream, and reduce merge conflicts when syncing from upstream.
 
 ## TUI Style conventions
 

@@ -9,4 +9,4 @@ expression: terminal.backend().vt100().screen().contents()
 
 › Assign new task to CodexPotter
 
-  ctrl+g external editor
+  . · ctrl+g editor

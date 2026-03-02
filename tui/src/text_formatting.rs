@@ -1,6 +1,10 @@
+use std::path::Path;
+
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
+
+use crate::exec_command::relativize_to_home;
 
 pub fn capitalize_first(input: &str) -> String {
     let mut chars = input.chars();
@@ -248,4 +252,77 @@ pub fn center_truncate_path(path: &str, max_width: usize) -> String {
     }
 
     front_truncate(path, max_width)
+}
+
+/// Format a directory path for display in the TUI.
+///
+/// - Replaces the user's home directory prefix with `~` when possible.
+/// - Optionally truncates long paths to `max_width` columns, preserving trailing segments.
+pub fn format_directory_for_display(directory: &Path, max_width: Option<usize>) -> String {
+    let formatted = if let Some(rel) = relativize_to_home(directory) {
+        if rel.as_os_str().is_empty() {
+            "~".to_string()
+        } else {
+            format!("~{}{}", std::path::MAIN_SEPARATOR, rel.display())
+        }
+    } else {
+        directory.display().to_string()
+    };
+
+    if let Some(max_width) = max_width {
+        if max_width == 0 {
+            return String::new();
+        }
+        if UnicodeWidthStr::width(formatted.as_str()) > max_width {
+            return center_truncate_path(&formatted, max_width);
+        }
+    }
+
+    formatted
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn format_directory_for_display_does_not_truncate_short_paths() {
+        let out = format_directory_for_display(Path::new("short/path"), Some(50));
+        assert_eq!(out, "short/path");
+    }
+
+    #[test]
+    fn format_directory_for_display_center_truncates_long_paths_and_keeps_suffix() {
+        let sep = std::path::MAIN_SEPARATOR.to_string();
+        let raw = [
+            "this",
+            "is",
+            "a",
+            "very",
+            "very",
+            "very",
+            "very",
+            "very",
+            "very",
+            "long",
+            "path",
+            "to",
+            "codex-potter",
+        ]
+        .join(&sep);
+        let out = format_directory_for_display(Path::new(raw.as_str()), Some(50));
+        assert!(
+            unicode_width::UnicodeWidthStr::width(out.as_str()) <= 50,
+            "expected output to fit within max_width, got: {out:?}"
+        );
+        assert!(
+            out.contains('…'),
+            "expected long path to include an ellipsis, got: {out:?}"
+        );
+        assert!(
+            out.ends_with("codex-potter"),
+            "expected suffix to be preserved, got: {out:?}"
+        );
+    }
 }

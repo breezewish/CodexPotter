@@ -13,8 +13,7 @@ use ratatui::text::Span;
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
-use crate::exec_command::relativize_to_home;
-use crate::text_formatting::center_truncate_path;
+use crate::text_formatting::format_directory_for_display;
 use crate::ui_colors::orange_color;
 use crate::ui_colors::secondary_color;
 
@@ -126,7 +125,7 @@ pub fn build_startup_banner_lines(
     let dir_max_width = usize::from(width)
         .saturating_sub(dir_prefix_width + model_gap_width + model_label_width)
         .max(1);
-    let dir_display = format_directory(directory, Some(dir_max_width));
+    let dir_display = format_directory_for_display(directory, Some(dir_max_width));
 
     let mut directory_spans: Vec<Span<'static>> = vec![
         Span::from(ASCII_INDENT),
@@ -144,29 +143,6 @@ pub fn build_startup_banner_lines(
     lines.push(Line::from(""));
 
     lines
-}
-
-fn format_directory(directory: &Path, max_width: Option<usize>) -> String {
-    let formatted = if let Some(rel) = relativize_to_home(directory) {
-        if rel.as_os_str().is_empty() {
-            "~".to_string()
-        } else {
-            format!("~{}{}", std::path::MAIN_SEPARATOR, rel.display())
-        }
-    } else {
-        directory.display().to_string()
-    };
-
-    if let Some(max_width) = max_width {
-        if max_width == 0 {
-            return String::new();
-        }
-        if UnicodeWidthStr::width(formatted.as_str()) > max_width {
-            return center_truncate_path(&formatted, max_width);
-        }
-    }
-
-    formatted
 }
 
 #[cfg(test)]

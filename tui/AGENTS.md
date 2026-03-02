@@ -28,7 +28,7 @@ Divergences must be documented in places below to avoid regression when syncing 
 - No `Esc`-driven UX (no backtrack priming; `Esc` only dismisses popups).
 - No steer mode (always queue).
 - No image pasting support.
-- Bottom pane footer messages are customized.
+- Bottom pane prompt footer shows working dir + optional git branch, plus the ctrl+g editor hint.
 - Better word jump by using ICU4X word segmentations.
 - Prompt history is persisted under `~/.codexpotter/history.jsonl`.
 

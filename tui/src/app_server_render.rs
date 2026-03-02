@@ -30,6 +30,7 @@ use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::ChatComposer;
 use crate::bottom_pane::ChatComposerDraft;
 use crate::bottom_pane::InputResult;
+use crate::bottom_pane::PromptFooterContext;
 use crate::bottom_pane::PromptFooterOverride;
 use crate::exec_cell::CommandOutput;
 use crate::exec_cell::ExecCell;
@@ -112,15 +113,17 @@ pub async fn prompt_user_with_tui(
     show_startup_banner: bool,
     check_for_update_on_startup: bool,
     composer_draft: Option<ChatComposerDraft>,
+    prompt_footer: PromptFooterContext,
 ) -> anyhow::Result<Option<String>> {
     let (app_event_tx_raw, mut app_event_rx) = unbounded_channel::<AppEvent>();
     let app_event_tx = AppEventSender::new(app_event_tx_raw);
 
-    let file_search_dir = std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir());
+    let file_search_dir = prompt_footer.working_dir.clone();
     let file_search = FileSearchManager::new(file_search_dir.clone(), app_event_tx.clone());
     let mut prompt_history = crate::prompt_history_store::PromptHistoryStore::new();
 
     let mut bottom_pane = new_default_bottom_pane(tui, app_event_tx.clone(), true);
+    bottom_pane.set_prompt_footer_context(prompt_footer);
     if let Some(draft) = composer_draft {
         bottom_pane.composer_mut().restore_draft(draft);
     }
@@ -492,6 +495,7 @@ pub async fn run_render_only_with_tui_options_and_queue(
     backend: RenderOnlyBackendChannels,
     queued_user_messages: &mut VecDeque<String>,
     composer_draft: &mut Option<crate::bottom_pane::ChatComposerDraft>,
+    prompt_footer: PromptFooterContext,
 ) -> anyhow::Result<AppExitInfo> {
     let RenderOnlyBackendChannels {
         codex_op_tx,
@@ -502,7 +506,7 @@ pub async fn run_render_only_with_tui_options_and_queue(
     let (app_event_tx_raw, mut app_event_rx) = unbounded_channel::<AppEvent>();
     let app_event_tx = AppEventSender::new(app_event_tx_raw);
 
-    let file_search_dir = std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir());
+    let file_search_dir = prompt_footer.working_dir.clone();
     let file_search = FileSearchManager::new(file_search_dir, app_event_tx.clone());
     let prompt_history = crate::prompt_history_store::PromptHistoryStore::new();
 
@@ -516,6 +520,7 @@ pub async fn run_render_only_with_tui_options_and_queue(
         .map_err(|err| anyhow::Error::msg(err.to_string()))?;
 
     let mut bottom_pane = new_default_bottom_pane(tui, app_event_tx.clone(), true);
+    bottom_pane.set_prompt_footer_context(prompt_footer);
     if let Some(draft) = composer_draft.take() {
         bottom_pane.composer_mut().restore_draft(draft);
     }
@@ -2327,7 +2332,7 @@ mod tests {
 
         let processor = RenderOnlyProcessor::new(app_event_tx.clone());
         let (op_tx, _op_rx) = unbounded_channel::<Op>();
-        let bottom_pane = BottomPane::new(BottomPaneParams {
+        let mut bottom_pane = BottomPane::new(BottomPaneParams {
             frame_requester: crate::tui::FrameRequester::test_dummy(),
             enhanced_keys_supported: false,
             app_event_tx: app_event_tx.clone(),
@@ -2335,6 +2340,10 @@ mod tests {
             placeholder_text: "Assign new task to CodexPotter".to_string(),
             disable_paste_burst: false,
         });
+        bottom_pane.set_prompt_footer_context(PromptFooterContext::new(
+            PathBuf::from("project"),
+            Some("main".to_string()),
+        ));
         let file_search = FileSearchManager::new(std::env::temp_dir(), app_event_tx.clone());
         let mut app = RenderAppState::new(
             processor,
@@ -2603,6 +2612,10 @@ mod tests {
             placeholder_text: "Assign new task to CodexPotter".to_string(),
             disable_paste_burst: false,
         });
+        bottom_pane.set_prompt_footer_context(PromptFooterContext::new(
+            PathBuf::from("project"),
+            Some("main".to_string()),
+        ));
         bottom_pane.set_task_running(true);
         bottom_pane.set_status_header_prefix(Some("Round 1/10".to_string()));
         if let Some(status) = bottom_pane.status_indicator_mut() {
@@ -2682,6 +2695,10 @@ mod tests {
             placeholder_text: "Assign new task to CodexPotter".to_string(),
             disable_paste_burst: false,
         });
+        bottom_pane.set_prompt_footer_context(PromptFooterContext::new(
+            PathBuf::from("project"),
+            Some("main".to_string()),
+        ));
         bottom_pane.set_task_running(true);
         bottom_pane.set_status_header_prefix(Some("Round 1/10".to_string()));
         bottom_pane.update_status_header_with_details(
@@ -2764,7 +2781,7 @@ mod tests {
         let (tx_raw, _rx_app) = unbounded_channel::<AppEvent>();
         let app_event_tx = AppEventSender::new(tx_raw);
 
-        let bottom_pane = BottomPane::new(BottomPaneParams {
+        let mut bottom_pane = BottomPane::new(BottomPaneParams {
             frame_requester: crate::tui::FrameRequester::test_dummy(),
             enhanced_keys_supported: false,
             app_event_tx,
@@ -2772,6 +2789,10 @@ mod tests {
             placeholder_text: "Assign new task to CodexPotter".to_string(),
             disable_paste_burst: false,
         });
+        bottom_pane.set_prompt_footer_context(PromptFooterContext::new(
+            PathBuf::from("project"),
+            Some("main".to_string()),
+        ));
         let transient_lines = vec![Line::from("")];
 
         let pane_height = bottom_pane.desired_height(width).max(1);
@@ -3416,6 +3437,10 @@ mod tests {
             placeholder_text: "Assign new task to CodexPotter".to_string(),
             disable_paste_burst: false,
         });
+        bottom_pane.set_prompt_footer_context(PromptFooterContext::new(
+            PathBuf::from("project"),
+            Some("main".to_string()),
+        ));
         bottom_pane.set_task_running(true);
         if let Some(status) = bottom_pane.status_indicator_mut() {
             // Ensure the elapsed timer stays at 0s for a stable snapshot.
@@ -3547,6 +3572,10 @@ mod tests {
             placeholder_text: "Assign new task to CodexPotter".to_string(),
             disable_paste_burst: false,
         });
+        bottom_pane.set_prompt_footer_context(PromptFooterContext::new(
+            PathBuf::from("project"),
+            Some("main".to_string()),
+        ));
         bottom_pane.set_task_running(true);
         if let Some(status) = bottom_pane.status_indicator_mut() {
             status.pause_timer_at(Instant::now());
@@ -3981,7 +4010,13 @@ mod tests {
     fn render_prompt_footer_line(override_mode: Option<PromptFooterOverride>) -> String {
         let area = Rect::new(0, 0, 80, 1);
         let mut buf = ratatui::buffer::Buffer::empty(area);
-        crate::bottom_pane::render_prompt_footer_for_test(area, &mut buf, override_mode);
+        crate::bottom_pane::render_prompt_footer_for_test(
+            area,
+            &mut buf,
+            override_mode,
+            std::path::Path::new("project"),
+            Some("main"),
+        );
 
         let mut out = String::new();
         for x in 0..area.width {

@@ -108,6 +108,8 @@ pub async fn run_resume(
     let resolved = resolve_project_paths(cwd, project_path)?;
     std::env::set_current_dir(&resolved.workdir)
         .with_context(|| format!("set current directory to {}", resolved.workdir.display()))?;
+    let git_branch = crate::project::resolve_git_branch(&resolved.workdir);
+    let prompt_footer = codex_tui::PromptFooterContext::new(resolved.workdir.clone(), git_branch);
 
     let progress_file_rel = resolved
         .progress_file
@@ -146,6 +148,7 @@ pub async fn run_resume(
             .render_turn(
                 String::new(),
                 idx != 0,
+                prompt_footer.clone(),
                 op_tx.clone(),
                 event_rx,
                 fatal_exit_rx,
@@ -186,6 +189,7 @@ pub async fn run_resume(
             .render_turn(
                 String::new(),
                 has_completed_rounds,
+                prompt_footer.clone(),
                 op_tx.clone(),
                 event_rx,
                 fatal_exit_rx,

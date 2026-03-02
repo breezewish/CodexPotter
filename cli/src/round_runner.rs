@@ -337,6 +337,10 @@ async fn run_potter_round_inner(
         .render_turn(
             prompt,
             pad_before_first_cell,
+            codex_tui::PromptFooterContext::new(
+                context.workdir.clone(),
+                crate::project::resolve_git_branch(&context.workdir),
+            ),
             op_tx,
             ui_event_rx,
             fatal_exit_rx,

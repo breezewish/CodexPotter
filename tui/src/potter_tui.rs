@@ -5,6 +5,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::AppExitInfo;
+use crate::bottom_pane::PromptFooterContext;
 use crate::tui;
 use crate::tui::Tui;
 
@@ -93,7 +94,10 @@ impl CodexPotterTui {
     /// Returns:
     /// - `Ok(Some(prompt))`: submitted
     /// - `Ok(None)`: cancelled (Ctrl+C)
-    pub async fn prompt_user(&mut self) -> anyhow::Result<Option<String>> {
+    pub async fn prompt_user(
+        &mut self,
+        prompt_footer: PromptFooterContext,
+    ) -> anyhow::Result<Option<String>> {
         let show_startup_banner = !self.turns_rendered;
         let composer_draft = self.composer_draft.take();
         crate::app_server_render::prompt_user_with_tui(
@@ -101,6 +105,7 @@ impl CodexPotterTui {
             show_startup_banner,
             self.check_for_update_on_startup,
             composer_draft,
+            prompt_footer,
         )
         .await
     }
@@ -160,6 +165,7 @@ impl CodexPotterTui {
         &mut self,
         prompt: String,
         pad_before_first_cell: bool,
+        prompt_footer: PromptFooterContext,
         codex_op_tx: UnboundedSender<Op>,
         codex_event_rx: UnboundedReceiver<Event>,
         fatal_exit_rx: UnboundedReceiver<String>,
@@ -182,6 +188,7 @@ impl CodexPotterTui {
             backend,
             &mut queued,
             &mut composer_draft,
+            prompt_footer,
         )
         .await;
         self.queued_user_prompts = queued;

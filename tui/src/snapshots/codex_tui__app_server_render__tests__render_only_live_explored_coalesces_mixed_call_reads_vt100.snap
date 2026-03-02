@@ -15,4 +15,4 @@ expression: terminal.backend().vt100().screen().contents()
 
 › Assign new task to CodexPotter
 
-  ctrl+g external editor
+  project [main] · ctrl+g editor

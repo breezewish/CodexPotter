@@ -55,6 +55,7 @@ mod wrapping;
 #[cfg(test)]
 mod test_backend;
 
+pub use bottom_pane::PromptFooterContext;
 pub use exit::AppExitInfo;
 pub use exit::ExitReason;
 pub use global_gitignore_prompt::GlobalGitignorePromptOutcome;

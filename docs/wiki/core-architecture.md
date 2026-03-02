@@ -75,8 +75,8 @@ session/round boundaries and successful session completion as normal history cel
 Key modules:
 
 - `tui/src/potter_tui.rs`: `CodexPotterTui` wrapper that owns terminal lifetime and exposes:
-  - `prompt_user()` for the initial goal
-  - `render_turn()` for a single round
+  - `prompt_user(...)` for the initial goal
+  - `render_turn(...)` for a single round
   - queued prompts + composer draft persistence across rounds
 - `tui/src/app_server_render.rs`: the render-only runner that:
   - sends `Op::UserInput` to start the turn
@@ -120,7 +120,7 @@ Durable memory is the progress file and the repository state on disk.
    (`cli/src/codex_compat.rs` + `cli/src/app_server_backend.rs`).
 3. Initialize the terminal UI (`codex_tui::CodexPotterTui::new()`).
 4. Optionally show a global gitignore recommendation prompt.
-5. Prompt the user for the initial goal (`CodexPotterTui::prompt_user()`).
+5. Prompt the user for the initial goal (`CodexPotterTui::prompt_user(...)`).
 
 ### 2) Session initialization
 

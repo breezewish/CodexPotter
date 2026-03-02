@@ -59,6 +59,14 @@ pub fn resolve_git_commit(workdir: &Path) -> String {
     git_stdout_trimmed(workdir, &["rev-parse", "HEAD"]).unwrap_or_default()
 }
 
+/// Resolve the current git branch name for `workdir`.
+///
+/// Returns `None` when `workdir` is not a git repository, `HEAD` is detached, or when git is not
+/// available.
+pub fn resolve_git_branch(workdir: &Path) -> Option<String> {
+    git_stdout_trimmed(workdir, &["symbolic-ref", "-q", "--short", "HEAD"])
+}
+
 pub fn render_project_main(user_prompt: &str, git_commit: &str, git_branch: &str) -> String {
     let git_commit = yaml_escape_double_quoted(git_commit);
     let git_branch = yaml_escape_double_quoted(git_branch);

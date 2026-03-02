@@ -39,7 +39,7 @@ Implementation entry point:
 - `StatusIndicatorWidget` (optional; only shown while a task is running)
 - `QueuedUserMessages` list (shown while running; supports quick editing)
 - `ChatComposer` textarea (always present)
-- 1-line prompt footer ("ctrl+g external editor", with temporary overrides)
+- 1-line prompt footer (`<working dir> [branch] · ctrl+g editor`, with temporary overrides)
 
 Code:
 

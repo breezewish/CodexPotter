@@ -188,7 +188,13 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    let Some(user_prompt) = ui.prompt_user().await? else {
+    let Some(user_prompt) = ui
+        .prompt_user(codex_tui::PromptFooterContext::new(
+            workdir.clone(),
+            crate::project::resolve_git_branch(&workdir),
+        ))
+        .await?
+    else {
         return Ok(());
     };
 
@@ -199,8 +205,13 @@ async fn main() -> anyhow::Result<()> {
 
     'session: loop {
         let next_prompt = pending_user_prompts.pop_next_prompt(|| ui.pop_queued_user_prompt());
-        let Some(next_prompt) =
-            prompt_queue::next_prompt_or_prompt_user(next_prompt, || ui.prompt_user()).await?
+        let Some(next_prompt) = prompt_queue::next_prompt_or_prompt_user(next_prompt, || {
+            ui.prompt_user(codex_tui::PromptFooterContext::new(
+                workdir.clone(),
+                crate::project::resolve_git_branch(&workdir),
+            ))
+        })
+        .await?
         else {
             break 'session;
         };

@@ -113,7 +113,7 @@ Key modules:
 
 - `tui/src/potter_tui.rs`: `CodexPotterTui` wrapper that:
   - owns the terminal lifetime (raw mode + cleanup on drop)
-  - exposes `prompt_user()` and `render_turn()`
+  - exposes `prompt_user(...)` and `render_turn(...)`
   - persists queued prompts + composer draft across turns
 - `tui/src/app_server_render.rs`: "render-only" runner that:
   - draws the history viewport + bottom pane

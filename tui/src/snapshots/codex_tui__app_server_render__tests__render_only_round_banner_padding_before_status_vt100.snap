@@ -1,6 +1,5 @@
 ---
 source: tui/src/app_server_render.rs
-assertion_line: 1902
 expression: terminal.backend().vt100().screen().contents()
 ---
 • CodexPotter: iteration round 1/10
@@ -10,4 +9,4 @@ expression: terminal.backend().vt100().screen().contents()
 
 › Assign new task to CodexPotter
 
-  ctrl+g external editor
+  project [main] · ctrl+g editor

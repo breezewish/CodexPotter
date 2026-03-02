@@ -30,6 +30,9 @@ pub use list_selection_view::SelectionItem;
 pub use list_selection_view::SelectionViewParams;
 pub use queued_user_messages::QueuedUserMessages;
 
+use std::path::Path;
+use std::path::PathBuf;
+
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
@@ -49,6 +52,27 @@ pub const QUIT_SHORTCUT_TIMEOUT: std::time::Duration = std::time::Duration::from
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PromptFooterOverride {
     ExternalEditorHint,
+}
+
+/// The context shown in the 1-line prompt footer under the composer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromptFooterContext {
+    /// Working directory shown in the footer.
+    pub working_dir: PathBuf,
+    /// Current git branch for `working_dir`, when available.
+    pub git_branch: Option<String>,
+}
+
+impl PromptFooterContext {
+    /// Create a new prompt footer context.
+    ///
+    /// Empty or whitespace-only branch names are treated as `None`.
+    pub fn new(working_dir: PathBuf, git_branch: Option<String>) -> Self {
+        Self {
+            working_dir,
+            git_branch: git_branch.and_then(|branch| (!branch.trim().is_empty()).then_some(branch)),
+        }
+    }
 }
 
 pub struct BottomPaneParams {
@@ -79,6 +103,7 @@ pub struct BottomPane {
     queued_user_messages: QueuedUserMessages,
     composer: ChatComposer,
     prompt_footer_override: Option<PromptFooterOverride>,
+    prompt_footer: PromptFooterContext,
 }
 
 impl BottomPane {
@@ -113,6 +138,9 @@ impl BottomPane {
             queued_user_messages: QueuedUserMessages::new(),
             composer,
             prompt_footer_override: None,
+            // Avoid deriving this from the process cwd so tests stay deterministic. Callers are
+            // expected to set this explicitly via `set_prompt_footer_context`.
+            prompt_footer: PromptFooterContext::new(PathBuf::from("."), None),
         }
     }
 
@@ -201,6 +229,16 @@ impl BottomPane {
         self.prompt_footer_override = override_mode;
     }
 
+    /// Set the working directory and optional git branch shown in the prompt footer.
+    pub fn set_prompt_footer_context(&mut self, context: PromptFooterContext) {
+        if self.prompt_footer == context {
+            return;
+        }
+
+        self.prompt_footer = context;
+        self.request_redraw();
+    }
+
     fn new_status_indicator(&self) -> StatusIndicatorWidget {
         let mut status =
             StatusIndicatorWidget::new(self.frame_requester.clone(), self.animations_enabled);
@@ -266,7 +304,13 @@ impl Renderable for BottomPane {
 
         if prompt_footer_height > 0 {
             let footer_area = Rect::new(area.x, composer_area.bottom(), area.width, 1);
-            render_prompt_footer(footer_area, buf, self.prompt_footer_override);
+            render_prompt_footer(
+                footer_area,
+                buf,
+                self.prompt_footer_override,
+                &self.prompt_footer.working_dir,
+                self.prompt_footer.git_branch.as_deref(),
+            );
         }
 
         let height_above_composer = area
@@ -348,7 +392,13 @@ impl Renderable for BottomPane {
     }
 }
 
-fn render_prompt_footer(area: Rect, buf: &mut Buffer, override_mode: Option<PromptFooterOverride>) {
+fn render_prompt_footer(
+    area: Rect,
+    buf: &mut Buffer,
+    override_mode: Option<PromptFooterOverride>,
+    working_dir: &Path,
+    git_branch: Option<&str>,
+) {
     if area.is_empty() {
         return;
     }
@@ -358,10 +408,18 @@ fn render_prompt_footer(area: Rect, buf: &mut Buffer, override_mode: Option<Prom
             " ".into(),
             Span::from(external_editor_integration::EXTERNAL_EDITOR_HINT).bold(),
         ]),
-        None => ratatui::text::Line::from(vec![
-            Span::from("ctrl+g "),
-            Span::from("external editor").dim(),
-        ]),
+        None => {
+            let dir_display =
+                crate::text_formatting::format_directory_for_display(working_dir, Some(50));
+            let mut spans: Vec<Span<'static>> = vec![Span::from(dir_display).dim()];
+            if let Some(branch) = git_branch.filter(|branch| !branch.trim().is_empty()) {
+                spans.push(Span::from(format!(" [{branch}]")).cyan());
+            }
+            spans.push(Span::from(" · ").dim());
+            spans.push(Span::from("ctrl+g"));
+            spans.push(Span::from(" editor").dim());
+            ratatui::text::Line::from(spans)
+        }
     };
 
     // Match the legacy footer indent.
@@ -380,6 +438,8 @@ pub fn render_prompt_footer_for_test(
     area: Rect,
     buf: &mut Buffer,
     override_mode: Option<PromptFooterOverride>,
+    working_dir: &Path,
+    git_branch: Option<&str>,
 ) {
-    render_prompt_footer(area, buf, override_mode);
+    render_prompt_footer(area, buf, override_mode, working_dir, git_branch);
 }

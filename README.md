@@ -20,7 +20,7 @@ For agents: This file is carefully maintained and polished for better readabilit
 
 - 🤖 **Codex-first** — Codex subscription is all you need; no extra LLM needed.
 - 🧭 **Auto-review / reconcile** — Review and polish multi rounds until fully aligned with your instruction.
-- 💦 **Clean-room** — Use clean context in each round, avoid pollution, maximize IQ.
+- 💦 **Clean-room** — Use clean context in each round, avoid context poisoning, maximize IQ.
 - 🎯 **Attention is all you need** — Keep you focused on _crafting_ tasks, instead of _cleaning up_ unfinished work.
 - 🚀 **Never worse than Codex** — Drive Codex, nothing more; no business prompts which may not suit you.
 - 🧩 **Seamless integration** — AGENTS.md, skills & MCPs just work™ ; opt in to improve plan / review.
@@ -82,6 +82,7 @@ CodexPotter is not suitable for such tasks:
 - [x] Skill popup
 - [x] Resume (history replay + continue iterating)
 - [x] Better handling of stream disconnect / similar network issues
+- [ ] Better plan / user selection support
 - [ ] Agent-call friendly (non-interactive exec and resume)
 - [ ] Better sandbox support
 - [ ] Interoperability with codex CLI sessions (for follow-up prompts)

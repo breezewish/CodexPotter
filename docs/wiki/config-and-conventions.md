@@ -28,7 +28,7 @@ Created by `cli/src/project.rs`:
   - prompt history for the bottom composer (see `tui-chat-composer.md`)
 - `~/.codexpotter/codex-compat/`
   - a "Codex home" shim created by `cli/src/codex_compat.rs`
-  - contains symlinks to `~/.codex/config.toml` and `~/.codex/auth.json`
+  - contains symlinks to `$CODEX_HOME/{config.toml,auth.json,skills,rules,AGENTS.md}` (defaults to `~/.codex` when `CODEX_HOME` is unset)
 
 Everything under `.codexpotter/` is intended to be ignored by git.
 

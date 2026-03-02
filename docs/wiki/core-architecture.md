@@ -91,9 +91,9 @@ Key modules:
    - `.codexpotter/projects/YYYY/MM/DD/N/MAIN.md` (progress file)
    - a gitignored knowledge base directory (scratchpad for intermediate findings)
 2. Per-user state under the user's home directory:
-   - `~/.codexpotter/config.toml`
-   - `~/.codexpotter/history.jsonl` (prompt history for the composer)
-   - `~/.codexpotter/codex-compat/` (a "Codex home" shim; symlinks to `~/.codex/*`)
+- `~/.codexpotter/config.toml`
+- `~/.codexpotter/history.jsonl` (prompt history for the composer)
+- `~/.codexpotter/codex-compat/` (a "Codex home" shim; symlinks to `$CODEX_HOME/*` when set, otherwise `~/.codex/*`)
 
 Everything under `.codexpotter/` is intended to be gitignored.
 

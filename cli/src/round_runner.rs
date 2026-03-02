@@ -334,18 +334,21 @@ async fn run_potter_round_inner(
     ));
 
     ui.set_project_started_at(context.project_started_at);
+    let status_header_prefix = Some(format!("Round {round_current}/{round_total}"));
+    let prompt_footer = codex_tui::PromptFooterContext::new(
+        context.workdir.clone(),
+        crate::project::resolve_git_branch(&context.workdir),
+    );
     let exit_info = ui
-        .render_turn(
+        .render_turn(codex_tui::RenderTurnParams {
             prompt,
             pad_before_first_cell,
-            codex_tui::PromptFooterContext::new(
-                context.workdir.clone(),
-                crate::project::resolve_git_branch(&context.workdir),
-            ),
-            op_tx,
-            ui_event_rx,
+            status_header_prefix,
+            prompt_footer,
+            codex_op_tx: op_tx,
+            codex_event_rx: ui_event_rx,
             fatal_exit_rx,
-        )
+        })
         .await?;
 
     let exit_reason = exit_info.exit_reason;

@@ -3,8 +3,8 @@
 //! # Divergences from upstream Codex TUI
 //!
 //! Upstream Codex does not render these cells. They are used to surface CodexPotter-specific
-//! runner behavior, such as multi-round iteration markers, project hints, stream recovery retries,
-//! and the final "session succeeded" summary.
+//! runner behavior, such as project hints, stream recovery retries, and the final "session
+//! succeeded" summary.
 //!
 //! See `tui/AGENTS.md` ("Additional CodexPotter items" and "auto retry on stream/network errors").
 
@@ -26,21 +26,6 @@ use crate::text_formatting::capitalize_first;
 use crate::ui_colors::secondary_color;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_lines;
-
-/// Render a marker that indicates an iteration round boundary.
-pub fn new_potter_round_started(current: u32, total: u32) -> PrefixedWrappedHistoryCell {
-    let text: Text<'static> = Line::from(vec![
-        Span::styled(
-            "CodexPotter: ",
-            Style::default()
-                .fg(secondary_color())
-                .add_modifier(Modifier::BOLD),
-        ),
-        format!("iteration round {current}/{total}").into(),
-    ])
-    .into();
-    PrefixedWrappedHistoryCell::new(text, "• ".dim(), "  ")
-}
 
 /// Render a hint that points to the created project prompt file.
 pub fn new_potter_project_hint(user_prompt_file: PathBuf) -> PrefixedWrappedHistoryCell {

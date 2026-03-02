@@ -11,6 +11,17 @@ use crate::bottom_pane::PromptFooterContext;
 use crate::tui;
 use crate::tui::Tui;
 
+/// Parameters for [`CodexPotterTui::render_turn`].
+pub struct RenderTurnParams {
+    pub prompt: String,
+    pub pad_before_first_cell: bool,
+    pub status_header_prefix: Option<String>,
+    pub prompt_footer: PromptFooterContext,
+    pub codex_op_tx: UnboundedSender<Op>,
+    pub codex_event_rx: UnboundedReceiver<Event>,
+    pub fatal_exit_rx: UnboundedReceiver<String>,
+}
+
 /// `codex-potter`-specific TUI session wrapper:
 /// - Reuses the legacy composer to collect the initial prompt
 /// - Reuses the single-turn runner pipeline to render each turn
@@ -185,15 +196,16 @@ impl CodexPotterTui {
 
     /// Render a single round (render-only runner) until the control plane signals the round
     /// finished (`EventMsg::PotterRoundFinished`) or the user interrupts.
-    pub async fn render_turn(
-        &mut self,
-        prompt: String,
-        pad_before_first_cell: bool,
-        prompt_footer: PromptFooterContext,
-        codex_op_tx: UnboundedSender<Op>,
-        codex_event_rx: UnboundedReceiver<Event>,
-        fatal_exit_rx: UnboundedReceiver<String>,
-    ) -> anyhow::Result<AppExitInfo> {
+    pub async fn render_turn(&mut self, params: RenderTurnParams) -> anyhow::Result<AppExitInfo> {
+        let RenderTurnParams {
+            prompt,
+            pad_before_first_cell,
+            status_header_prefix,
+            prompt_footer,
+            codex_op_tx,
+            codex_event_rx,
+            fatal_exit_rx,
+        } = params;
         let Some(project_started_at) = self.project_started_at else {
             anyhow::bail!(
                 "internal error: CodexPotterTui::set_project_started_at must be called before render_turn"
@@ -202,6 +214,7 @@ impl CodexPotterTui {
         let startup_warnings = std::mem::take(&mut self.startup_warnings);
         let options = crate::app_server_render::RenderOnlyTurnOptions {
             render_user_prompt: false,
+            status_header_prefix,
             pad_before_first_cell: pad_before_first_cell || self.turns_rendered,
         };
         let mut queued = std::mem::take(&mut self.queued_user_prompts);

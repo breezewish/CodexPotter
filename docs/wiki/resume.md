@@ -52,15 +52,15 @@ Projects created before `potter-rollout.jsonl` was introduced are currently unsu
 Replay is driven by `potter-rollout.jsonl` (`cli/src/resume.rs`):
 
 - `session_started`: injects `EventMsg::PotterSessionStarted` (once at the top).
-- `round_started`: injects `EventMsg::PotterRoundStarted`.
+- `round_started`: injects `EventMsg::PotterRoundStarted` (updates the live status banner prefix).
 - `round_configured`: triggers replay of the referenced upstream rollout file.
-- `session_succeeded` / `round_finished`: injects summary + boundary markers.
+- `session_succeeded` / `round_finished`: injects terminal summary + control-plane boundaries.
 
 ### Unfinished rounds (EOF without `round_finished`)
 
 `potter-rollout.jsonl` is append-only and may end in the middle of a round (e.g. after
-`round_configured` but before a trailing `round_finished`). In that case, `resume` still renders
-the **session started** and **round started** boundary markers *before* showing the action picker,
+`round_configured` but before a trailing `round_finished`). In that case, `resume` still replays
+the **session started** and **round started** context events *before* showing the action picker,
 so the user always sees the initial prompt and round context first.
 
 Implementation detail (`cli/src/resume.rs`): the pre-action replay for an unfinished round includes

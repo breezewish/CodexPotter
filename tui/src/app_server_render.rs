@@ -554,10 +554,17 @@ fn draw_prompt_bottom_pane(
 }
 
 /// Controls how a single render-only turn is rendered into the terminal transcript.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenderOnlyTurnOptions {
     /// When true, renders the user prompt into the transcript before sending it to the backend.
     pub render_user_prompt: bool,
+
+    /// Optional status header prefix shown while a task is running (e.g. `Round 2/10`).
+    ///
+    /// This is primarily used by `codex-potter` to keep the working banner consistent when
+    /// continuing an unfinished round (where `EventMsg::PotterRoundStarted` may be suppressed to
+    /// avoid inserting a duplicate transcript marker).
+    pub status_header_prefix: Option<String>,
 
     /// When true, inserts a blank line before the first emitted history cell in this single-turn
     /// session. This is useful when multiple turns are rendered into the same terminal transcript
@@ -569,6 +576,7 @@ impl Default for RenderOnlyTurnOptions {
     fn default() -> Self {
         Self {
             render_user_prompt: true,
+            status_header_prefix: None,
             pad_before_first_cell: false,
         }
     }
@@ -658,6 +666,7 @@ pub async fn run_render_only_with_tui_options_and_queue(
     let mut bottom_pane = new_default_bottom_pane(tui, app_event_tx.clone(), true);
     bottom_pane.set_prompt_footer_context(prompt_footer);
     bottom_pane.set_project_started_at(Some(project_started_at));
+    bottom_pane.set_status_header_prefix(options.status_header_prefix.clone());
     if let Some(draft) = state.composer_draft.take() {
         bottom_pane.composer_mut().restore_draft(draft);
     }
@@ -838,13 +847,10 @@ impl RenderOnlyProcessor {
                     crate::history_cell_potter::new_potter_project_hint(user_prompt_file),
                 )));
             }
-            EventMsg::PotterRoundStarted { current, total } => {
+            EventMsg::PotterRoundStarted { .. } => {
                 self.flush_pending_exploring_cell();
                 self.flush_pending_success_ran_cell();
                 self.needs_final_message_separator = true;
-                self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                    crate::history_cell_potter::new_potter_round_started(current, total),
-                )));
             }
             EventMsg::PotterSessionSucceeded {
                 rounds,
@@ -3042,8 +3048,7 @@ mod tests {
         let transient_height = u16::try_from(transient_lines.len()).unwrap_or(u16::MAX);
         let viewport_height = pane_height.saturating_add(transient_height);
 
-        let history_lines =
-            crate::history_cell_potter::new_potter_round_started(1, 10).display_lines(width);
+        let history_lines = vec![Line::from("• Transcript line")];
         let history_height = u16::try_from(history_lines.len()).unwrap_or(u16::MAX);
         let height = history_height.saturating_add(viewport_height).max(1);
 
@@ -3139,8 +3144,7 @@ mod tests {
         let transient_height = u16::try_from(transient_lines.len()).unwrap_or(u16::MAX);
         let viewport_height = pane_height.saturating_add(transient_height);
 
-        let history_lines =
-            crate::history_cell_potter::new_potter_round_started(1, 10).display_lines(width);
+        let history_lines = vec![Line::from("• Transcript line")];
         let history_height = u16::try_from(history_lines.len()).unwrap_or(u16::MAX);
         let height = history_height.saturating_add(viewport_height).max(1);
 
@@ -4440,7 +4444,7 @@ mod tests {
     }
 
     #[test]
-    fn render_only_potter_round_started_emits_round_banner() {
+    fn render_only_potter_round_started_does_not_emit_transcript_cells() {
         let (mut proc, mut rx) = make_render_only_processor_without_prompt();
 
         proc.handle_codex_event(Event {
@@ -4452,11 +4456,10 @@ mod tests {
         });
 
         let events = drain_history_cell_strings(&mut rx, u16::MAX);
-        let [round_banner] = events.as_slice() else {
-            panic!("expected exactly one round banner cell");
-        };
-        let rendered = round_banner.join("\n") + "\n";
-        assert_snapshot!("render_only_potter_round_started", rendered);
+        assert!(
+            events.is_empty(),
+            "expected PotterRoundStarted to not emit transcript cells, got: {events:?}"
+        );
     }
 
     fn render_prompt_footer_line(override_mode: Option<PromptFooterOverride>) -> String {

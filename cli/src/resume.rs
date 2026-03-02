@@ -147,14 +147,15 @@ pub async fn run_resume(
         let (_fatal_exit_tx, fatal_exit_rx) = unbounded_channel::<String>();
 
         let exit_info = ui
-            .render_turn(
-                String::new(),
-                idx != 0,
-                prompt_footer.clone(),
-                op_tx.clone(),
-                event_rx,
+            .render_turn(codex_tui::RenderTurnParams {
+                prompt: String::new(),
+                pad_before_first_cell: idx != 0,
+                status_header_prefix: None,
+                prompt_footer: prompt_footer.clone(),
+                codex_op_tx: op_tx.clone(),
+                codex_event_rx: event_rx,
                 fatal_exit_rx,
-            )
+            })
             .await?;
 
         match replay_round_exit_decision(&exit_info.exit_reason, &outcome) {
@@ -188,14 +189,15 @@ pub async fn run_resume(
         let (_fatal_exit_tx, fatal_exit_rx) = unbounded_channel::<String>();
 
         let exit_info = ui
-            .render_turn(
-                String::new(),
-                has_completed_rounds,
-                prompt_footer.clone(),
-                op_tx.clone(),
-                event_rx,
+            .render_turn(codex_tui::RenderTurnParams {
+                prompt: String::new(),
+                pad_before_first_cell: has_completed_rounds,
+                status_header_prefix: None,
+                prompt_footer: prompt_footer.clone(),
+                codex_op_tx: op_tx.clone(),
+                codex_event_rx: event_rx,
                 fatal_exit_rx,
-            )
+            })
             .await?;
 
         match exit_info.exit_reason {

@@ -25,12 +25,17 @@ pub async fn prompt_action_picker(
         })
         .collect();
 
-    let mut view = ListSelectionView::new(SelectionViewParams {
-        title: Some("Select Action".to_string()),
-        footer_hint: Some(Line::from("Press enter to run, or esc to exit.")),
-        items,
-        ..Default::default()
-    });
+    let (app_event_tx, _app_event_rx) = tokio::sync::mpsc::unbounded_channel();
+    let app_event_tx = crate::app_event_sender::AppEventSender::new(app_event_tx);
+    let mut view = ListSelectionView::new(
+        SelectionViewParams {
+            title: Some("Select Action".to_string()),
+            footer_hint: Some(Line::from("Press enter to run, or esc to exit.")),
+            items,
+            ..Default::default()
+        },
+        app_event_tx,
+    );
 
     let width = tui.terminal.last_known_screen_size.width.max(1);
     tui.draw(view.desired_height(width).saturating_add(1), |frame| {
@@ -100,16 +105,19 @@ mod tests {
 
     #[test]
     fn action_picker_prompt_renders_with_top_padding_line() {
-        let view = ListSelectionView::new(SelectionViewParams {
-            title: Some("Select Action".to_string()),
-            footer_hint: Some(Line::from("Press enter to run, or esc to exit.")),
-            items: vec![SelectionItem {
-                name: "Iterate 10 more rounds".to_string(),
-                dismiss_on_select: true,
+        let view = ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Select Action".to_string()),
+                footer_hint: Some(Line::from("Press enter to run, or esc to exit.")),
+                items: vec![SelectionItem {
+                    name: "Iterate 10 more rounds".to_string(),
+                    dismiss_on_select: true,
+                    ..Default::default()
+                }],
                 ..Default::default()
-            }],
-            ..Default::default()
-        });
+            },
+            crate::app_event_sender::AppEventSender::new(tokio::sync::mpsc::unbounded_channel().0),
+        );
 
         let width = 54;
         let height = view.desired_height(width).saturating_add(1);

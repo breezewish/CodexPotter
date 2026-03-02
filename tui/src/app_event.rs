@@ -33,4 +33,9 @@ pub enum AppEvent {
     StartCommitAnimation,
     StopCommitAnimation,
     CommitTick,
+
+    /// Apply a user-confirmed syntax theme selection.
+    SyntaxThemeSelected {
+        name: String,
+    },
 }

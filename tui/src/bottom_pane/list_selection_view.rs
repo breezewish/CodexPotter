@@ -13,6 +13,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use unicode_width::UnicodeWidthStr;
 
+use crate::app_event_sender::AppEventSender;
 use crate::key_hint::KeyBinding;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
@@ -25,6 +26,67 @@ use super::selection_popup_common::render_menu_surface;
 use super::selection_popup_common::render_rows;
 use super::selection_popup_common::wrap_styled_line;
 
+/// Minimum list width (in content columns) required before the side-by-side
+/// layout is activated. Keeps the list usable even when sharing horizontal
+/// space with the side content panel.
+const MIN_LIST_WIDTH_FOR_SIDE: u16 = 40;
+
+/// Horizontal gap (in columns) between the list area and the side content
+/// panel when side-by-side layout is active.
+const SIDE_CONTENT_GAP: u16 = 2;
+
+/// Shared menu-surface horizontal inset (2 cells per side) used by selection popups.
+const MENU_SURFACE_HORIZONTAL_INSET: u16 = 4;
+
+/// Controls how the side content panel is sized relative to the popup width.
+///
+/// When the computed side width falls below `side_content_min_width` or the
+/// remaining list area would be narrower than [`MIN_LIST_WIDTH_FOR_SIDE`], the
+/// side-by-side layout is abandoned and the stacked fallback is used instead.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SideContentWidth {
+    /// Fixed number of columns. `Fixed(0)` disables side content entirely.
+    Fixed(u16),
+    /// Exact 50/50 split of the content area (minus the inter-column gap).
+    Half,
+}
+
+impl Default for SideContentWidth {
+    fn default() -> Self {
+        Self::Fixed(0)
+    }
+}
+
+/// Returns the popup content width after subtracting the shared menu-surface
+/// horizontal inset (2 columns on each side).
+pub fn popup_content_width(total_width: u16) -> u16 {
+    total_width.saturating_sub(MENU_SURFACE_HORIZONTAL_INSET)
+}
+
+/// Returns side-by-side layout widths as `(list_width, side_width)` when the
+/// layout can fit. Returns `None` when the side panel is disabled/too narrow or
+/// when the remaining list width would become unusably small.
+pub fn side_by_side_layout_widths(
+    content_width: u16,
+    side_content_width: SideContentWidth,
+    side_content_min_width: u16,
+) -> Option<(u16, u16)> {
+    let side_width = match side_content_width {
+        SideContentWidth::Fixed(0) => return None,
+        SideContentWidth::Fixed(width) => width,
+        SideContentWidth::Half => content_width.saturating_sub(SIDE_CONTENT_GAP) / 2,
+    };
+    if side_width < side_content_min_width {
+        return None;
+    }
+    let list_width = content_width.saturating_sub(SIDE_CONTENT_GAP + side_width);
+    (list_width >= MIN_LIST_WIDTH_FOR_SIDE).then_some((list_width, side_width))
+}
+
+pub type SelectionAction = Box<dyn Fn(&AppEventSender) + Send + Sync>;
+pub type OnSelectionChangedCallback = Option<Box<dyn Fn(usize, &AppEventSender) + Send + Sync>>;
+pub type OnCancelCallback = Option<Box<dyn Fn(&AppEventSender) + Send + Sync>>;
+
 #[derive(Default)]
 pub struct SelectionItem {
     pub name: String,
@@ -34,6 +96,7 @@ pub struct SelectionItem {
     pub is_current: bool,
     pub is_default: bool,
     pub is_disabled: bool,
+    pub actions: Vec<SelectionAction>,
     pub dismiss_on_select: bool,
     pub search_value: Option<String>,
     pub disabled_reason: Option<String>,
@@ -49,6 +112,32 @@ pub struct SelectionViewParams {
     pub search_placeholder: Option<String>,
     pub header: Box<dyn Renderable>,
     pub initial_selected_idx: Option<usize>,
+
+    /// Rich content rendered beside (wide terminals) or below (narrow terminals)
+    /// the list items, inside the bordered menu surface. Used by the theme picker
+    /// to show a syntax-highlighted preview.
+    pub side_content: Box<dyn Renderable>,
+
+    /// Width mode for side content when side-by-side layout is active.
+    pub side_content_width: SideContentWidth,
+
+    /// Minimum side panel width required before side-by-side layout activates.
+    pub side_content_min_width: u16,
+
+    /// Optional fallback content rendered when side-by-side does not fit.
+    /// When absent, `side_content` is reused.
+    pub stacked_side_content: Option<Box<dyn Renderable>>,
+
+    /// Keep side-content background colors after rendering in side-by-side mode.
+    /// Disabled by default so existing popups preserve their reset-background look.
+    pub preserve_side_content_bg: bool,
+
+    /// Called when the highlighted item changes (navigation, filter, number-key).
+    /// Receives the *actual* item index, not the filtered/visible index.
+    pub on_selection_changed: OnSelectionChangedCallback,
+
+    /// Called when the picker is dismissed via Esc/Ctrl+C without selecting.
+    pub on_cancel: OnCancelCallback,
 }
 
 impl Default for SelectionViewParams {
@@ -63,6 +152,13 @@ impl Default for SelectionViewParams {
             search_placeholder: None,
             header: Box::new(()),
             initial_selected_idx: None,
+            side_content: Box::new(()),
+            side_content_width: SideContentWidth::default(),
+            side_content_min_width: 0,
+            stacked_side_content: None,
+            preserve_side_content_bg: false,
+            on_selection_changed: None,
+            on_cancel: None,
         }
     }
 }
@@ -73,6 +169,7 @@ pub struct ListSelectionView {
     items: Vec<SelectionItem>,
     state: ScrollState,
     complete: bool,
+    app_event_tx: AppEventSender,
     is_searchable: bool,
     search_query: String,
     search_placeholder: Option<String>,
@@ -80,10 +177,17 @@ pub struct ListSelectionView {
     last_selected_actual_idx: Option<usize>,
     header: Box<dyn Renderable>,
     initial_selected_idx: Option<usize>,
+    side_content: Box<dyn Renderable>,
+    side_content_width: SideContentWidth,
+    side_content_min_width: u16,
+    stacked_side_content: Option<Box<dyn Renderable>>,
+    preserve_side_content_bg: bool,
+    on_selection_changed: OnSelectionChangedCallback,
+    on_cancel: OnCancelCallback,
 }
 
 impl ListSelectionView {
-    pub fn new(params: SelectionViewParams) -> Self {
+    pub fn new(params: SelectionViewParams, app_event_tx: AppEventSender) -> Self {
         let mut header = params.header;
         if params.title.is_some() || params.subtitle.is_some() {
             let title = params.title.map(|title| Line::from(title.bold()));
@@ -100,6 +204,7 @@ impl ListSelectionView {
             items: params.items,
             state: ScrollState::new(),
             complete: false,
+            app_event_tx,
             is_searchable: params.is_searchable,
             search_query: String::new(),
             search_placeholder: if params.is_searchable {
@@ -111,6 +216,13 @@ impl ListSelectionView {
             last_selected_actual_idx: None,
             header,
             initial_selected_idx: params.initial_selected_idx,
+            side_content: params.side_content,
+            side_content_width: params.side_content_width,
+            side_content_min_width: params.side_content_min_width,
+            stacked_side_content: params.stacked_side_content,
+            preserve_side_content_bg: params.preserve_side_content_bg,
+            on_selection_changed: params.on_selection_changed,
+            on_cancel: params.on_cancel,
         };
         s.apply_filter();
         s
@@ -220,6 +332,9 @@ impl ListSelectionView {
     }
 
     pub fn cancel(&mut self) {
+        if let Some(cb) = &self.on_cancel {
+            cb(&self.app_event_tx);
+        }
         self.complete = true;
     }
 
@@ -235,11 +350,15 @@ impl ListSelectionView {
         MAX_POPUP_ROWS.min(len.max(1))
     }
 
-    fn apply_filter(&mut self) {
-        let previously_selected = self
-            .state
+    fn selected_actual_idx(&self) -> Option<usize> {
+        self.state
             .selected_idx
             .and_then(|visible_idx| self.filtered_indices.get(visible_idx).copied())
+    }
+
+    fn apply_filter(&mut self) {
+        let previously_selected = self
+            .selected_actual_idx()
             .or_else(|| {
                 (!self.is_searchable)
                     .then(|| self.items.iter().position(|item| item.is_current))
@@ -283,6 +402,12 @@ impl ListSelectionView {
         let visible = Self::max_visible_rows(len);
         self.state.clamp_selection(len);
         self.state.ensure_visible(len, visible);
+
+        // Notify the callback when filtering changes the selected actual item
+        // so live preview stays in sync (e.g. typing in the theme picker).
+        if self.selected_actual_idx() != previously_selected {
+            self.fire_selection_changed();
+        }
     }
 
     fn build_rows(&self) -> Vec<GenericDisplayRow> {
@@ -333,19 +458,35 @@ impl ListSelectionView {
     }
 
     fn move_up(&mut self) {
+        let before = self.selected_actual_idx();
         let len = self.visible_len();
         self.state.move_up_wrap(len);
         let visible = Self::max_visible_rows(len);
         self.state.ensure_visible(len, visible);
         self.skip_disabled_up();
+        if self.selected_actual_idx() != before {
+            self.fire_selection_changed();
+        }
     }
 
     fn move_down(&mut self) {
+        let before = self.selected_actual_idx();
         let len = self.visible_len();
         self.state.move_down_wrap(len);
         let visible = Self::max_visible_rows(len);
         self.state.ensure_visible(len, visible);
         self.skip_disabled_down();
+        if self.selected_actual_idx() != before {
+            self.fire_selection_changed();
+        }
+    }
+
+    fn fire_selection_changed(&self) {
+        if let Some(cb) = &self.on_selection_changed
+            && let Some(actual_idx) = self.selected_actual_idx()
+        {
+            cb(actual_idx, &self.app_event_tx);
+        }
     }
 
     fn accept(&mut self) {
@@ -363,16 +504,77 @@ impl ListSelectionView {
             {
                 self.last_selected_actual_idx = Some(*actual_idx);
             }
+            for act in &item.actions {
+                act(&self.app_event_tx);
+            }
             if item.dismiss_on_select {
                 self.complete = true;
             }
         } else if selected_item.is_none() {
+            if let Some(cb) = &self.on_cancel {
+                cb(&self.app_event_tx);
+            }
             self.complete = true;
         }
     }
 
     fn rows_width(total_width: u16) -> u16 {
         total_width.saturating_sub(2)
+    }
+
+    fn clear_to_terminal_bg(buf: &mut Buffer, area: Rect) {
+        let buf_area = buf.area();
+        let min_x = area.x.max(buf_area.x);
+        let min_y = area.y.max(buf_area.y);
+        let max_x = area
+            .x
+            .saturating_add(area.width)
+            .min(buf_area.x.saturating_add(buf_area.width));
+        let max_y = area
+            .y
+            .saturating_add(area.height)
+            .min(buf_area.y.saturating_add(buf_area.height));
+        for y in min_y..max_y {
+            for x in min_x..max_x {
+                buf[(x, y)]
+                    .set_symbol(" ")
+                    .set_style(ratatui::style::Style::reset());
+            }
+        }
+    }
+
+    fn force_bg_to_terminal_bg(buf: &mut Buffer, area: Rect) {
+        let buf_area = buf.area();
+        let min_x = area.x.max(buf_area.x);
+        let min_y = area.y.max(buf_area.y);
+        let max_x = area
+            .x
+            .saturating_add(area.width)
+            .min(buf_area.x.saturating_add(buf_area.width));
+        let max_y = area
+            .y
+            .saturating_add(area.height)
+            .min(buf_area.y.saturating_add(buf_area.height));
+        for y in min_y..max_y {
+            for x in min_x..max_x {
+                buf[(x, y)].set_bg(ratatui::style::Color::Reset);
+            }
+        }
+    }
+
+    fn stacked_side_content(&self) -> &dyn Renderable {
+        self.stacked_side_content
+            .as_deref()
+            .unwrap_or_else(|| self.side_content.as_ref())
+    }
+
+    fn side_layout_width(&self, content_width: u16) -> Option<u16> {
+        side_by_side_layout_widths(
+            content_width,
+            self.side_content_width,
+            self.side_content_min_width,
+        )
+        .map(|(_, side_width)| side_width)
     }
 
     fn skip_disabled_down(&mut self) {
@@ -412,23 +614,38 @@ impl ListSelectionView {
 
 impl Renderable for ListSelectionView {
     fn desired_height(&self, width: u16) -> u16 {
-        // Measure wrapped height for up to MAX_POPUP_ROWS items at the given width.
-        // Build the same display rows used by the renderer so wrapping math matches.
+        let inner_width = popup_content_width(width);
+        let side_w = self.side_layout_width(inner_width);
+
+        let full_rows_width = Self::rows_width(width);
+        let effective_rows_width = if let Some(sw) = side_w {
+            full_rows_width.saturating_sub(SIDE_CONTENT_GAP + sw)
+        } else {
+            full_rows_width
+        };
+
+        // Measure wrapped height for up to MAX_POPUP_ROWS items.
         let rows = self.build_rows();
-        let rows_width = Self::rows_width(width);
         let rows_height = measure_rows_height(
             &rows,
             &self.state,
             MAX_POPUP_ROWS,
-            rows_width.saturating_add(1),
+            effective_rows_width.saturating_add(1),
         );
 
-        // Subtract 4 for the padding on the left and right of the header.
-        let mut height = self.header.desired_height(width.saturating_sub(4));
+        let mut height = self.header.desired_height(inner_width);
         height = height.saturating_add(rows_height + 3);
         if self.is_searchable {
             height = height.saturating_add(1);
         }
+
+        if side_w.is_none() {
+            let side_h = self.stacked_side_content().desired_height(inner_width);
+            if side_h > 0 {
+                height = height.saturating_add(1 + side_h);
+            }
+        }
+
         if let Some(note) = &self.footer_note {
             let note_width = width.saturating_sub(2);
             let note_lines = wrap_styled_line(note, note_width);
@@ -459,23 +676,39 @@ impl Renderable for ListSelectionView {
         // Paint the shared menu surface and then layout inside the returned inset.
         let content_area = render_menu_surface(outer_content_area, buf);
 
-        let header_height = self
-            .header
-            // Subtract 4 for the padding on the left and right of the header.
-            .desired_height(outer_content_area.width.saturating_sub(4));
+        let inner_width = popup_content_width(outer_content_area.width);
+        let side_w = self.side_layout_width(inner_width);
+
+        // When side-by-side is active, shrink the list to make room.
         let rows = self.build_rows();
-        let rows_width = Self::rows_width(outer_content_area.width);
+        let full_rows_width = Self::rows_width(outer_content_area.width);
+        let effective_rows_width = if let Some(sw) = side_w {
+            full_rows_width.saturating_sub(SIDE_CONTENT_GAP + sw)
+        } else {
+            full_rows_width
+        };
+        let header_height = self.header.desired_height(inner_width);
         let rows_height = measure_rows_height(
             &rows,
             &self.state,
             MAX_POPUP_ROWS,
-            rows_width.saturating_add(1),
+            effective_rows_width.saturating_add(1),
         );
-        let [header_area, _, search_area, list_area] = Layout::vertical([
+
+        let stacked_side_h = if side_w.is_none() {
+            self.stacked_side_content().desired_height(inner_width)
+        } else {
+            0
+        };
+        let stacked_gap = if stacked_side_h > 0 { 1 } else { 0 };
+
+        let [header_area, _, search_area, list_area, _, stacked_side_area] = Layout::vertical([
             Constraint::Max(header_height),
             Constraint::Max(1),
             Constraint::Length(if self.is_searchable { 1 } else { 0 }),
             Constraint::Length(rows_height),
+            Constraint::Length(stacked_gap),
+            Constraint::Length(stacked_side_h),
         ])
         .areas(content_area);
 
@@ -508,7 +741,7 @@ impl Renderable for ListSelectionView {
             let render_area = Rect {
                 x: list_area.x.saturating_sub(2),
                 y: list_area.y,
-                width: rows_width.max(1),
+                width: effective_rows_width.max(1),
                 height: list_area.height,
             };
             render_rows(
@@ -519,6 +752,49 @@ impl Renderable for ListSelectionView {
                 render_area.height as usize,
                 "no matches",
             );
+        }
+
+        if let Some(sw) = side_w {
+            let side_x = content_area.x + content_area.width - sw;
+            let side_area = Rect::new(side_x, content_area.y, sw, content_area.height);
+
+            let clear_x = side_x.saturating_sub(SIDE_CONTENT_GAP);
+            let clear_w = outer_content_area
+                .x
+                .saturating_add(outer_content_area.width)
+                .saturating_sub(clear_x);
+            Self::clear_to_terminal_bg(
+                buf,
+                Rect::new(
+                    clear_x,
+                    outer_content_area.y,
+                    clear_w,
+                    outer_content_area.height,
+                ),
+            );
+            self.side_content.render(side_area, buf);
+            if !self.preserve_side_content_bg {
+                Self::force_bg_to_terminal_bg(
+                    buf,
+                    Rect::new(
+                        clear_x,
+                        outer_content_area.y,
+                        clear_w,
+                        outer_content_area.height,
+                    ),
+                );
+            }
+        } else if stacked_side_area.height > 0 {
+            let clear_height = (outer_content_area.y + outer_content_area.height)
+                .saturating_sub(stacked_side_area.y);
+            let clear_area = Rect::new(
+                outer_content_area.x,
+                stacked_side_area.y,
+                outer_content_area.width,
+                clear_height,
+            );
+            Self::clear_to_terminal_bg(buf, clear_area);
+            self.stacked_side_content().render(stacked_side_area, buf);
         }
 
         if footer_area.height > 0 {
@@ -565,21 +841,28 @@ impl Renderable for ListSelectionView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app_event_sender::AppEventSender;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use tokio::sync::mpsc::unbounded_channel;
 
     #[test]
     fn action_picker_popup_snapshot() {
-        let view = ListSelectionView::new(SelectionViewParams {
-            title: Some("Select Action".to_string()),
-            footer_hint: Some(Line::from("Press enter to run, or esc to exit.")),
-            items: vec![SelectionItem {
-                name: "Iterate 10 more rounds".to_string(),
-                dismiss_on_select: true,
+        let (app_event_tx, _app_event_rx) = unbounded_channel();
+        let app_event_tx = AppEventSender::new(app_event_tx);
+        let view = ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Select Action".to_string()),
+                footer_hint: Some(Line::from("Press enter to run, or esc to exit.")),
+                items: vec![SelectionItem {
+                    name: "Iterate 10 more rounds".to_string(),
+                    dismiss_on_select: true,
+                    ..Default::default()
+                }],
                 ..Default::default()
-            }],
-            ..Default::default()
-        });
+            },
+            app_event_tx,
+        );
 
         let width = 54;
         let height = view.desired_height(width);

@@ -32,6 +32,9 @@ pub use chat_composer::InputResult;
 pub use list_selection_view::ListSelectionView;
 pub use list_selection_view::SelectionItem;
 pub use list_selection_view::SelectionViewParams;
+pub use list_selection_view::SideContentWidth;
+pub use list_selection_view::popup_content_width;
+pub use list_selection_view::side_by_side_layout_widths;
 pub use queued_user_messages::QueuedUserMessages;
 
 use std::path::Path;
@@ -154,6 +157,14 @@ impl BottomPane {
 
     pub fn composer_mut(&mut self) -> &mut ChatComposer {
         &mut self.composer
+    }
+
+    pub fn is_task_running(&self) -> bool {
+        self.status.is_some()
+    }
+
+    pub fn prompt_working_dir(&self) -> &Path {
+        &self.prompt_footer.working_dir
     }
 
     pub fn set_task_running(&mut self, running: bool) {

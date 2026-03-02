@@ -6,14 +6,17 @@ use std::path::PathBuf;
 use codex_protocol::openai_models::ReasoningEffort;
 use toml_edit::DocumentMut;
 use toml_edit::Item as TomlItem;
+use toml_edit::Table as TomlTable;
+use toml_edit::value;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct CodexModelConfig {
+pub struct CodexConfig {
     pub model: Option<String>,
     pub reasoning_effort: Option<ReasoningEffort>,
     pub profile: Option<String>,
     pub profiles: HashMap<String, CodexProfileModelConfig>,
     pub project_root_markers: Option<Vec<String>>,
+    pub tui_theme: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -29,7 +32,7 @@ pub struct ResolvedCodexModelConfig {
 }
 
 pub fn resolve_codex_model_config(cwd: &Path) -> io::Result<ResolvedCodexModelConfig> {
-    let raw = load_codex_model_config(cwd)?;
+    let raw = load_codex_config(cwd)?;
 
     let profile_config = match &raw.profile {
         Some(name) => raw.profiles.get(name).cloned().ok_or_else(|| {
@@ -53,11 +56,46 @@ pub fn resolve_codex_model_config(cwd: &Path) -> io::Result<ResolvedCodexModelCo
     })
 }
 
+pub fn resolve_codex_tui_theme(cwd: &Path) -> io::Result<Option<String>> {
+    let raw = load_codex_config(cwd)?;
+    Ok(raw.tui_theme)
+}
+
+pub fn persist_codex_tui_theme(codex_home: &Path, name: &str) -> io::Result<()> {
+    let config_path = codex_home.join("config.toml");
+    let write_paths = crate::path_utils::resolve_symlink_write_paths(&config_path)?;
+    let serialized = match write_paths.read_path {
+        Some(path) => match std::fs::read_to_string(&path) {
+            Ok(contents) => contents,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => String::new(),
+            Err(err) => return Err(err),
+        },
+        None => String::new(),
+    };
+
+    let mut doc = if serialized.is_empty() {
+        DocumentMut::new()
+    } else {
+        serialized.parse::<DocumentMut>().map_err(|err| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Error parsing config file {}: {err}", config_path.display()),
+            )
+        })?
+    };
+
+    let tui = ensure_table_for_write(&mut doc, "tui")?;
+    tui["theme"] = value(name.to_string());
+
+    crate::path_utils::write_atomically(&write_paths.write_path, &doc.to_string())?;
+    Ok(())
+}
+
 const DEFAULT_FALLBACK_MODEL: &str = "gpt-5.2-codex";
 
-fn load_codex_model_config(cwd: &Path) -> io::Result<CodexModelConfig> {
+fn load_codex_config(cwd: &Path) -> io::Result<CodexConfig> {
     let codex_home = find_codex_home()?;
-    let mut config = CodexModelConfig::default();
+    let mut config = CodexConfig::default();
 
     // Match codex config layering order (subset):
     // - system: /etc/codex/config.toml
@@ -97,7 +135,7 @@ fn default_system_config_path() -> PathBuf {
     }
 }
 
-fn find_codex_home() -> io::Result<PathBuf> {
+pub fn find_codex_home() -> io::Result<PathBuf> {
     if let Ok(val) = std::env::var("CODEX_HOME")
         && !val.is_empty()
     {
@@ -145,7 +183,7 @@ fn project_dirs_between<'a>(project_root: &'a Path, cwd: &'a Path) -> Vec<&'a Pa
     dirs
 }
 
-fn apply_config_layer_from_file(config: &mut CodexModelConfig, path: &Path) -> io::Result<()> {
+fn apply_config_layer_from_file(config: &mut CodexConfig, path: &Path) -> io::Result<()> {
     if path.as_os_str().is_empty() {
         return Ok(());
     }
@@ -171,7 +209,7 @@ fn apply_config_layer_from_file(config: &mut CodexModelConfig, path: &Path) -> i
     apply_config_layer_from_doc(config, &doc)
 }
 
-fn apply_config_layer_from_doc(config: &mut CodexModelConfig, doc: &DocumentMut) -> io::Result<()> {
+fn apply_config_layer_from_doc(config: &mut CodexConfig, doc: &DocumentMut) -> io::Result<()> {
     if let Some(item) = doc.get("model") {
         config.model = Some(read_string(item, "model")?);
     }
@@ -183,6 +221,17 @@ fn apply_config_layer_from_doc(config: &mut CodexModelConfig, doc: &DocumentMut)
     }
     if let Some(item) = doc.get("project_root_markers") {
         config.project_root_markers = Some(read_string_array(item, "project_root_markers")?);
+    }
+    if let Some(item) = doc.get("tui") {
+        let tui = item.as_table().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "config field `tui` must be a table",
+            )
+        })?;
+        if let Some(theme) = tui.get("theme") {
+            config.tui_theme = Some(read_string(theme, "tui.theme")?);
+        }
     }
 
     if let Some(profiles_item) = doc.get("profiles") {
@@ -252,6 +301,75 @@ fn read_string_array(item: &TomlItem, field: &str) -> io::Result<Vec<String>> {
     }
 
     Ok(out)
+}
+
+fn ensure_table_for_write<'a>(
+    doc: &'a mut DocumentMut,
+    key: &str,
+) -> io::Result<&'a mut TomlTable> {
+    if doc.get(key).and_then(TomlItem::as_table).is_some() {
+        return doc
+            .get_mut(key)
+            .and_then(TomlItem::as_table_mut)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("config field `{key}` must be a table"),
+                )
+            });
+    }
+
+    if doc.get(key).is_none() {
+        let mut table = TomlTable::new();
+        table.set_implicit(false);
+        doc[key] = TomlItem::Table(table);
+    }
+
+    let item = doc.get_mut(key).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("config field `{key}` must be a table"),
+        )
+    })?;
+    match item {
+        TomlItem::Table(table) => Ok(table),
+        TomlItem::Value(value) => {
+            if let Some(inline) = value.as_inline_table() {
+                let mut table = TomlTable::new();
+                table.set_implicit(false);
+                for (k, v) in inline.iter() {
+                    table[k] = TomlItem::Value(v.clone());
+                }
+                *item = TomlItem::Table(table);
+                item.as_table_mut().ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("config field `{key}` must be a table"),
+                    )
+                })
+            } else {
+                Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("config field `{key}` must be a table"),
+                ))
+            }
+        }
+        TomlItem::None => {
+            let mut table = TomlTable::new();
+            table.set_implicit(false);
+            *item = TomlItem::Table(table);
+            item.as_table_mut().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("config field `{key}` must be a table"),
+                )
+            })
+        }
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("config field `{key}` must be a table"),
+        )),
+    }
 }
 
 fn read_reasoning_effort(item: &TomlItem, field: &str) -> io::Result<ReasoningEffort> {
@@ -420,5 +538,48 @@ model = "gpt-5.2-codex"
 
         let resolved = resolve_codex_model_config(&cwd).expect("resolve");
         assert_eq!(resolved.model, "gpt-5.2-codex");
+    }
+
+    #[test]
+    #[serial]
+    fn resolves_tui_theme_from_layered_config() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let _env = EnvVarGuard::set("CODEX_HOME", codex_home.path());
+
+        write_config(
+            &codex_home.path().join("config.toml"),
+            r#"
+[tui]
+theme = "catppuccin-mocha"
+"#,
+        );
+
+        let cwd = tempfile::tempdir().expect("cwd");
+        let resolved = resolve_codex_tui_theme(cwd.path()).expect("resolve");
+        assert_eq!(resolved, Some("catppuccin-mocha".to_string()));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn persist_tui_theme_writes_through_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let codex_home_real = tempfile::tempdir().expect("tempdir");
+        let codex_home_compat = tempfile::tempdir().expect("tempdir");
+
+        let target = codex_home_real.path().join("config.toml");
+        let link = codex_home_compat.path().join("config.toml");
+        symlink(&target, &link).expect("symlink");
+
+        persist_codex_tui_theme(codex_home_compat.path(), "github").expect("persist theme");
+
+        let link_meta = std::fs::symlink_metadata(&link).expect("symlink metadata");
+        assert!(link_meta.file_type().is_symlink());
+
+        let contents = std::fs::read_to_string(&target).expect("read target config");
+        assert!(
+            contents.contains("theme = \"github\""),
+            "expected persisted config to contain theme selection, got: {contents}"
+        );
     }
 }

@@ -1,6 +1,7 @@
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::Op;
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -26,6 +27,13 @@ impl CodexPotterTui {
     pub fn new() -> anyhow::Result<Self> {
         let mut terminal = tui::init()?;
         terminal.clear()?;
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let codex_home = crate::codex_config::find_codex_home()?;
+        let theme = crate::codex_config::resolve_codex_tui_theme(&cwd)?;
+        if let Some(warning) = crate::render::highlight::set_theme_override(theme, Some(codex_home))
+        {
+            tracing::warn!("{warning}");
+        }
         Ok(Self {
             tui: Tui::new(terminal),
             turns_rendered: false,

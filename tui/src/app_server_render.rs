@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -226,6 +227,14 @@ pub async fn prompt_user_with_tui(
                             if !is_press {
                                 continue;
                             }
+                            if bottom_pane.composer().selection_popup_visible() {
+                                let (_result, needs_redraw) =
+                                    bottom_pane.composer_mut().handle_key_event(key_event);
+                                if needs_redraw {
+                                    tui.frame_requester().schedule_frame();
+                                }
+                                continue;
+                            }
                             if bottom_pane.composer().is_empty() {
                                 // Clear the inline viewport so the shell prompt is clean on exit.
                                 tui.terminal.clear()?;
@@ -309,7 +318,20 @@ pub async fn prompt_user_with_tui(
                                     tui.terminal.clear()?;
                                     return Ok(None);
                                 }
-                                SlashCommand::Theme => {}
+                                SlashCommand::Theme => {
+                                    let codex_home = crate::codex_config::find_codex_home().ok();
+                                    let current_name = crate::codex_config::resolve_codex_tui_theme(&file_search_dir)
+                                        .ok()
+                                        .flatten();
+                                    let terminal_width = tui.terminal.last_known_screen_size.width.max(1);
+                                    let params = crate::theme_picker::build_theme_picker_params(
+                                        current_name.as_deref(),
+                                        codex_home.as_deref(),
+                                        Some(terminal_width),
+                                    );
+                                    bottom_pane.composer_mut().show_selection_view(params);
+                                    tui.frame_requester().schedule_frame();
+                                }
                             },
                             InputResult::None => {}
                         }
@@ -357,6 +379,49 @@ fn handle_prompt_app_event(
                 .on_file_search_result(query, matches);
             tui.frame_requester().schedule_frame();
         }
+        AppEvent::SyntaxThemeSelected { name } => {
+            let cwd = bottom_pane.prompt_working_dir();
+            match crate::codex_config::find_codex_home() {
+                Ok(codex_home) => {
+                    match crate::codex_config::persist_codex_tui_theme(&codex_home, &name) {
+                        Ok(()) => {
+                            if let Some(theme) = crate::render::highlight::resolve_theme_by_name(
+                                &name,
+                                Some(&codex_home),
+                            ) {
+                                crate::render::highlight::set_syntax_theme(theme);
+                            }
+                        }
+                        Err(err) => {
+                            restore_runtime_theme_from_codex_config(cwd);
+                            let width = tui.terminal.last_known_screen_size.width;
+                            let lines = history_cell::new_error_event(format!(
+                                "Failed to save theme: {err}"
+                            ))
+                            .display_lines(width);
+                            if !lines.is_empty() {
+                                *should_pad_prompt_viewport = *should_pad_prompt_viewport
+                                    || should_pad_prompt_after_history_insert(&lines);
+                                tui.insert_history_lines(lines);
+                            }
+                        }
+                    }
+                }
+                Err(err) => {
+                    restore_runtime_theme_from_codex_config(cwd);
+                    let width = tui.terminal.last_known_screen_size.width;
+                    let lines =
+                        history_cell::new_error_event(format!("Failed to find CODEX_HOME: {err}"))
+                            .display_lines(width);
+                    if !lines.is_empty() {
+                        *should_pad_prompt_viewport = *should_pad_prompt_viewport
+                            || should_pad_prompt_after_history_insert(&lines);
+                        tui.insert_history_lines(lines);
+                    }
+                }
+            }
+            tui.frame_requester().schedule_frame();
+        }
         AppEvent::InsertHistoryCell(cell) => {
             let width = tui.terminal.last_known_screen_size.width;
             let lines = cell.display_lines(width);
@@ -400,6 +465,26 @@ fn handle_prompt_history_entry_request(
         .on_history_entry_response(log_id, offset, entry)
     {
         frame_requester.schedule_frame();
+    }
+}
+
+fn restore_runtime_theme_from_codex_config(cwd: &Path) {
+    let codex_home = crate::codex_config::find_codex_home().ok();
+    let configured = crate::codex_config::resolve_codex_tui_theme(cwd)
+        .ok()
+        .flatten();
+
+    let fallback_name = crate::render::highlight::adaptive_default_theme_name();
+    let theme = configured
+        .as_deref()
+        .and_then(|name| {
+            crate::render::highlight::resolve_theme_by_name(name, codex_home.as_deref())
+        })
+        .or_else(|| {
+            crate::render::highlight::resolve_theme_by_name(fallback_name, codex_home.as_deref())
+        });
+    if let Some(theme) = theme {
+        crate::render::highlight::set_syntax_theme(theme);
     }
 }
 
@@ -1194,7 +1279,8 @@ impl RenderAppState {
                                     }
                                     continue;
                                 }
-                                self.handle_key_event(key_event, tui.frame_requester());
+                                let width = tui.terminal.last_known_screen_size.width.max(1);
+                                self.handle_key_event(key_event, tui.frame_requester(), width);
                             }
                         TuiEvent::Paste(pasted) => {
                             // Many terminals convert newlines to \r when pasting (e.g., iTerm2),
@@ -1283,6 +1369,7 @@ impl RenderAppState {
         &mut self,
         key_event: crossterm::event::KeyEvent,
         frame_requester: crate::tui::FrameRequester,
+        terminal_width: u16,
     ) {
         if key_event.kind == crossterm::event::KeyEventKind::Release {
             return;
@@ -1312,6 +1399,14 @@ impl RenderAppState {
             && matches!(key_event.code, crossterm::event::KeyCode::Char('c'))
         {
             if !is_press {
+                return;
+            }
+            if self.bottom_pane.composer().selection_popup_visible() {
+                let (_result, needs_redraw) =
+                    self.bottom_pane.composer_mut().handle_key_event(key_event);
+                if needs_redraw {
+                    frame_requester.schedule_frame();
+                }
                 return;
             }
             if self.bottom_pane.composer().is_empty() {
@@ -1377,7 +1472,32 @@ impl RenderAppState {
                     self.exit_after_next_draw = true;
                     frame_requester.schedule_frame();
                 }
-                SlashCommand::Theme => {}
+                SlashCommand::Theme => {
+                    if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
+                        let message = format!(
+                            "'/{}' is disabled while a task is in progress.",
+                            cmd.command()
+                        );
+                        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                            history_cell::new_error_event(message),
+                        )));
+                        frame_requester.schedule_frame();
+                        return;
+                    }
+
+                    let codex_home = crate::codex_config::find_codex_home().ok();
+                    let cwd = self.bottom_pane.prompt_working_dir();
+                    let current_name = crate::codex_config::resolve_codex_tui_theme(cwd)
+                        .ok()
+                        .flatten();
+                    let params = crate::theme_picker::build_theme_picker_params(
+                        current_name.as_deref(),
+                        codex_home.as_deref(),
+                        Some(terminal_width),
+                    );
+                    self.bottom_pane.composer_mut().show_selection_view(params);
+                    frame_requester.schedule_frame();
+                }
             },
             InputResult::None => {}
         }
@@ -1444,6 +1564,44 @@ impl RenderAppState {
                 }
 
                 tui.insert_history_lines(display);
+            }
+            AppEvent::SyntaxThemeSelected { name } => {
+                let cwd = self.bottom_pane.prompt_working_dir();
+                match crate::codex_config::find_codex_home() {
+                    Ok(codex_home) => {
+                        match crate::codex_config::persist_codex_tui_theme(&codex_home, &name) {
+                            Ok(()) => {
+                                if let Some(theme) = crate::render::highlight::resolve_theme_by_name(
+                                    &name,
+                                    Some(&codex_home),
+                                ) {
+                                    crate::render::highlight::set_syntax_theme(theme);
+                                }
+                            }
+                            Err(err) => {
+                                restore_runtime_theme_from_codex_config(cwd);
+                                self.handle_app_event(
+                                    tui,
+                                    AppEvent::InsertHistoryCell(Box::new(
+                                        history_cell::new_error_event(format!(
+                                            "Failed to save theme: {err}"
+                                        )),
+                                    )),
+                                )?;
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        restore_runtime_theme_from_codex_config(cwd);
+                        self.handle_app_event(
+                            tui,
+                            AppEvent::InsertHistoryCell(Box::new(history_cell::new_error_event(
+                                format!("Failed to find CODEX_HOME: {err}"),
+                            ))),
+                        )?;
+                    }
+                }
+                tui.frame_requester().schedule_frame();
             }
             AppEvent::StartCommitAnimation => {
                 if self
@@ -2496,7 +2654,7 @@ mod tests {
 
         let mut right_repeat = KeyEvent::new(KeyCode::Right, KeyModifiers::NONE);
         right_repeat.kind = KeyEventKind::Repeat;
-        app.handle_key_event(right_repeat, crate::tui::FrameRequester::test_dummy());
+        app.handle_key_event(right_repeat, crate::tui::FrameRequester::test_dummy(), 80);
 
         let after =
             crate::render::renderable::Renderable::cursor_pos(&app.bottom_pane, area).unwrap();
@@ -2542,13 +2700,14 @@ mod tests {
             app.handle_key_event(
                 KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE),
                 crate::tui::FrameRequester::test_dummy(),
+                80,
             );
         }
         assert_eq!(app.bottom_pane.composer().current_text(), "hello world");
 
         let mut ctrl_w_repeat = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL);
         ctrl_w_repeat.kind = KeyEventKind::Repeat;
-        app.handle_key_event(ctrl_w_repeat, crate::tui::FrameRequester::test_dummy());
+        app.handle_key_event(ctrl_w_repeat, crate::tui::FrameRequester::test_dummy(), 80);
 
         assert_eq!(app.bottom_pane.composer().current_text(), "hello ");
     }
@@ -2588,11 +2747,13 @@ mod tests {
             app.handle_key_event(
                 KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE),
                 crate::tui::FrameRequester::test_dummy(),
+                80,
             );
         }
         app.handle_key_event(
             KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
             crate::tui::FrameRequester::test_dummy(),
+            80,
         );
 
         assert_eq!(app.bottom_pane.composer().current_text(), "@");
@@ -2646,11 +2807,13 @@ mod tests {
             app.handle_key_event(
                 KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE),
                 crate::tui::FrameRequester::test_dummy(),
+                80,
             );
         }
         app.handle_key_event(
             KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
             crate::tui::FrameRequester::test_dummy(),
+            80,
         );
 
         assert!(app.exit_after_next_draw, "expected /exit to request exit");
@@ -3892,6 +4055,7 @@ mod tests {
                 state: KeyEventState::NONE,
             },
             crate::tui::FrameRequester::test_dummy(),
+            width,
         );
 
         drain_render_history_events(

@@ -110,6 +110,8 @@ use ratatui::widgets::Block;
 use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::WidgetRef;
 
+use super::ListSelectionView;
+use super::SelectionViewParams;
 use super::chat_composer_history::ChatComposerHistory;
 use super::chat_composer_history::HistoryEntry;
 use super::command_popup::CommandPopup;
@@ -216,6 +218,7 @@ enum ActivePopup {
     Command(CommandPopup),
     File(FileSearchPopup),
     Skill(SkillPopup),
+    Selection(Box<ListSelectionView>),
 }
 
 const FOOTER_SPACING_HEIGHT: u16 = 0;
@@ -273,6 +276,7 @@ impl ChatComposer {
             }
             ActivePopup::File(popup) => Constraint::Max(popup.calculate_required_height()),
             ActivePopup::Skill(popup) => Constraint::Max(popup.calculate_required_height()),
+            ActivePopup::Selection(view) => Constraint::Max(view.desired_height(area.width)),
             ActivePopup::None => Constraint::Max(footer_total_height),
         };
         let [composer_rect, popup_rect] =
@@ -332,6 +336,17 @@ impl ChatComposer {
         self.paste_burst.clear_after_explicit_paste();
         self.sync_popups();
         true
+    }
+
+    pub fn show_selection_view(&mut self, params: SelectionViewParams) {
+        let view = ListSelectionView::new(params, self.app_event_tx.clone());
+        self.active_popup = ActivePopup::Selection(Box::new(view));
+        self.dismissed_file_popup_token = None;
+        self.dismissed_skill_popup_token = None;
+    }
+
+    pub fn selection_popup_visible(&self) -> bool {
+        matches!(&self.active_popup, ActivePopup::Selection(_))
     }
 
     /// Enable or disable paste-burst handling.
@@ -666,6 +681,7 @@ impl ChatComposer {
             ActivePopup::Command(_) => self.handle_key_event_with_slash_popup(key_event),
             ActivePopup::File(_) => self.handle_key_event_with_file_popup(key_event),
             ActivePopup::Skill(_) => self.handle_key_event_with_skill_popup(key_event),
+            ActivePopup::Selection(_) => self.handle_key_event_with_selection_popup(key_event),
             ActivePopup::None => self.handle_key_event_without_popup(key_event),
         };
 
@@ -985,6 +1001,24 @@ impl ChatComposer {
         }
 
         result
+    }
+
+    fn handle_key_event_with_selection_popup(
+        &mut self,
+        key_event: KeyEvent,
+    ) -> (InputResult, bool) {
+        self.footer_mode = reset_mode_after_activity(self.footer_mode);
+
+        let ActivePopup::Selection(view) = &mut self.active_popup else {
+            unreachable!();
+        };
+
+        view.handle_key_event(key_event);
+        if view.is_complete() {
+            self.active_popup = ActivePopup::None;
+        }
+
+        (InputResult::None, true)
     }
 
     /// Extract a token prefixed with `prefix` under the cursor, if any.
@@ -1560,6 +1594,10 @@ impl ChatComposer {
     }
 
     fn sync_popups(&mut self) {
+        if matches!(&self.active_popup, ActivePopup::Selection(_)) {
+            return;
+        }
+
         self.sync_slash_command_elements();
 
         let file_token = Self::current_at_token(&self.textarea);
@@ -1888,6 +1926,7 @@ impl Renderable for ChatComposer {
                 ActivePopup::Command(popup) => popup.calculate_required_height(width),
                 ActivePopup::File(c) => c.calculate_required_height(),
                 ActivePopup::Skill(c) => c.calculate_required_height(),
+                ActivePopup::Selection(view) => view.desired_height(width),
             }
     }
 
@@ -1902,6 +1941,9 @@ impl Renderable for ChatComposer {
             }
             ActivePopup::Skill(popup) => {
                 popup.render_ref(popup_rect, buf);
+            }
+            ActivePopup::Selection(view) => {
+                view.render(popup_rect, buf);
             }
             ActivePopup::None => {
                 let footer_props = self.footer_props();

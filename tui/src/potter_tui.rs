@@ -20,6 +20,7 @@ pub struct CodexPotterTui {
     queued_user_prompts: VecDeque<String>,
     composer_draft: Option<crate::bottom_pane::ChatComposerDraft>,
     check_for_update_on_startup: bool,
+    startup_warnings: Vec<String>,
 }
 
 impl CodexPotterTui {
@@ -30,9 +31,10 @@ impl CodexPotterTui {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let codex_home = crate::codex_config::find_codex_home()?;
         let theme = crate::codex_config::resolve_codex_tui_theme(&cwd)?;
+        let mut startup_warnings = Vec::new();
         if let Some(warning) = crate::render::highlight::set_theme_override(theme, Some(codex_home))
         {
-            tracing::warn!("{warning}");
+            startup_warnings.push(warning);
         }
         Ok(Self {
             tui: Tui::new(terminal),
@@ -40,6 +42,7 @@ impl CodexPotterTui {
             queued_user_prompts: VecDeque::new(),
             composer_draft: None,
             check_for_update_on_startup: true,
+            startup_warnings,
         })
     }
 
@@ -108,10 +111,12 @@ impl CodexPotterTui {
     ) -> anyhow::Result<Option<String>> {
         let show_startup_banner = !self.turns_rendered;
         let composer_draft = self.composer_draft.take();
+        let startup_warnings = std::mem::take(&mut self.startup_warnings);
         crate::app_server_render::prompt_user_with_tui(
             &mut self.tui,
             show_startup_banner,
             self.check_for_update_on_startup,
+            startup_warnings,
             composer_draft,
             prompt_footer,
         )
@@ -178,6 +183,7 @@ impl CodexPotterTui {
         codex_event_rx: UnboundedReceiver<Event>,
         fatal_exit_rx: UnboundedReceiver<String>,
     ) -> anyhow::Result<AppExitInfo> {
+        let startup_warnings = std::mem::take(&mut self.startup_warnings);
         let options = crate::app_server_render::RenderOnlyTurnOptions {
             render_user_prompt: false,
             pad_before_first_cell: pad_before_first_cell || self.turns_rendered,
@@ -189,13 +195,17 @@ impl CodexPotterTui {
             codex_event_rx,
             fatal_exit_rx,
         };
+        let state = crate::app_server_render::RenderOnlyTurnUiState {
+            queued_user_messages: &mut queued,
+            composer_draft: &mut composer_draft,
+        };
         let result = crate::app_server_render::run_render_only_with_tui_options_and_queue(
             &mut self.tui,
             prompt,
             options,
             backend,
-            &mut queued,
-            &mut composer_draft,
+            startup_warnings,
+            state,
             prompt_footer,
         )
         .await;

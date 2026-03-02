@@ -64,8 +64,8 @@ fn syntax_set() -> &'static SyntaxSet {
 ///
 /// Returns a warning message when the configured theme name cannot be
 /// resolved to a bundled theme or a custom `.tmTheme` file on disk.
-/// The caller should surface this via `Config::startup_warnings` so it
-/// appears as a `⚠` banner in the TUI.
+/// The caller should surface this as a startup warning so it appears as
+/// a `⚠` banner in the TUI.
 pub fn set_theme_override(name: Option<String>, codex_home: Option<PathBuf>) -> Option<String> {
     let mut warning = validate_theme_name(name.as_deref(), codex_home.as_deref());
     let override_set_ok = THEME_OVERRIDE.set(name.clone()).is_ok();

@@ -115,6 +115,7 @@ pub async fn prompt_user_with_tui(
     tui: &mut Tui,
     show_startup_banner: bool,
     check_for_update_on_startup: bool,
+    startup_warnings: Vec<String>,
     composer_draft: Option<ChatComposerDraft>,
     prompt_footer: PromptFooterContext,
 ) -> anyhow::Result<Option<String>> {
@@ -161,6 +162,18 @@ pub async fn prompt_user_with_tui(
                 crate::update_action::get_update_action(),
             )
             .display_lines(width);
+            if !lines.is_empty() {
+                should_pad_prompt_viewport =
+                    should_pad_prompt_viewport || should_pad_prompt_after_history_insert(&lines);
+                tui.insert_history_lines(lines);
+            }
+        }
+    }
+
+    if !startup_warnings.is_empty() {
+        let width = tui.terminal.last_known_screen_size.width.max(1);
+        for warning in startup_warnings {
+            let lines = history_cell::new_warning_event(warning).display_lines(width);
             if !lines.is_empty() {
                 should_pad_prompt_viewport =
                     should_pad_prompt_viewport || should_pad_prompt_after_history_insert(&lines);
@@ -571,6 +584,14 @@ pub struct RenderOnlyBackendChannels {
     pub fatal_exit_rx: UnboundedReceiver<String>,
 }
 
+/// Mutable UI state that must persist across render-only turns.
+pub struct RenderOnlyTurnUiState<'a> {
+    /// Prompts queued while a task is running (collected from the bottom composer).
+    pub queued_user_messages: &'a mut VecDeque<String>,
+    /// Draft composer contents to restore when returning to a prompt screen.
+    pub composer_draft: &'a mut Option<crate::bottom_pane::ChatComposerDraft>,
+}
+
 fn text_user_input_op(text: String) -> Op {
     Op::UserInput {
         items: vec![UserInput::Text {
@@ -592,8 +613,8 @@ pub async fn run_render_only_with_tui_options_and_queue(
     prompt: String,
     options: RenderOnlyTurnOptions,
     backend: RenderOnlyBackendChannels,
-    queued_user_messages: &mut VecDeque<String>,
-    composer_draft: &mut Option<crate::bottom_pane::ChatComposerDraft>,
+    startup_warnings: Vec<String>,
+    state: RenderOnlyTurnUiState<'_>,
     prompt_footer: PromptFooterContext,
 ) -> anyhow::Result<AppExitInfo> {
     let RenderOnlyBackendChannels {
@@ -604,6 +625,12 @@ pub async fn run_render_only_with_tui_options_and_queue(
 
     let (app_event_tx_raw, mut app_event_rx) = unbounded_channel::<AppEvent>();
     let app_event_tx = AppEventSender::new(app_event_tx_raw);
+
+    for warning in startup_warnings {
+        app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+            history_cell::new_warning_event(warning),
+        )));
+    }
 
     let file_search_dir = prompt_footer.working_dir.clone();
     let file_search = FileSearchManager::new(file_search_dir, app_event_tx.clone());
@@ -620,14 +647,14 @@ pub async fn run_render_only_with_tui_options_and_queue(
 
     let mut bottom_pane = new_default_bottom_pane(tui, app_event_tx.clone(), true);
     bottom_pane.set_prompt_footer_context(prompt_footer);
-    if let Some(draft) = composer_draft.take() {
+    if let Some(draft) = state.composer_draft.take() {
         bottom_pane.composer_mut().restore_draft(draft);
     }
     let (history_log_id, history_entry_count) = prompt_history.metadata();
     bottom_pane
         .composer_mut()
         .set_history_metadata(history_log_id, history_entry_count);
-    let queued_user_messages_state = std::mem::take(queued_user_messages);
+    let queued_user_messages_state = std::mem::take(state.queued_user_messages);
     let mut app = RenderAppState::new(
         driver,
         app_event_tx.clone(),
@@ -648,8 +675,8 @@ pub async fn run_render_only_with_tui_options_and_queue(
             &mut fatal_exit_rx,
         )
         .await;
-    *queued_user_messages = app.queued_user_messages;
-    *composer_draft = app.bottom_pane.composer_mut().take_draft();
+    *state.queued_user_messages = app.queued_user_messages;
+    *state.composer_draft = app.bottom_pane.composer_mut().take_draft();
     result
 }
 

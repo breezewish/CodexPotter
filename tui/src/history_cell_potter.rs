@@ -79,55 +79,64 @@ impl HistoryCell for PotterProjectSucceededCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let elapsed = crate::status_indicator_widget::fmt_elapsed_compact(self.duration.as_secs());
         let rounds = self.rounds;
-        let summary_style = Style::default()
-            .fg(secondary_color())
-            .add_modifier(Modifier::BOLD);
+        let separator_style = Style::default().fg(secondary_color());
+        let summary_style = separator_style.add_modifier(Modifier::BOLD);
         let resume_project_path = derive_resume_project_path(&self.user_prompt_file)
             .unwrap_or_else(|| self.user_prompt_file.to_string_lossy().to_string());
         let resume_command = format!("codex-potter resume {resume_project_path}");
 
-        let mut lines: Vec<Line<'static>> = vec![
-            potter_project_succeeded_separator(width),
-            Line::from(""),
-            Line::from(vec![
-                "  ".into(),
-                Span::styled("CodexPotter summary:", summary_style),
-                " iterated ".into(),
-                format!("{rounds} rounds").bold(),
-                " in ".into(),
-                elapsed.bold(),
-                ".".into(),
-            ]),
-            Line::from(""),
-            Line::from(vec![
-                "    Task history: ".into(),
-                self.user_prompt_file.to_string_lossy().to_string().cyan(),
-            ]),
+        let mut header_spans: Vec<Span<'static>> = vec![
+            Span::styled("─ ", separator_style),
+            Span::styled("CodexPotter summary:", summary_style),
+            " ".into(),
+            format!("{rounds} rounds").bold(),
+            " in ".into(),
+            elapsed.bold(),
+            Span::styled(" ─", separator_style),
         ];
+        let header_width = header_spans
+            .iter()
+            .map(|span| span.content.as_ref().width())
+            .sum::<usize>();
+        let filler_width = usize::from(width).saturating_sub(header_width);
+        if filler_width > 0 {
+            header_spans.push(Span::styled("─".repeat(filler_width), separator_style));
+        }
+
+        let loop_label = "Loop more rounds:";
+        let label_width = loop_label.len();
+
+        let mut lines: Vec<Line<'static>> = vec![Line::from(header_spans), Line::from("")];
 
         if !(self.git_commit_start.is_empty() && self.git_commit_end.is_empty()) {
-            lines.push(Line::from(""));
+            let git_label = "Git:";
             lines.push(Line::from(vec![
-                "    Git:          ".into(),
+                "  ".into(),
+                format!("{git_label:<label_width$}").into(),
+                "  ".into(),
                 short_git_commit(&self.git_commit_start).cyan(),
                 " -> ".into(),
                 short_git_commit(&self.git_commit_end).cyan(),
             ]));
         }
 
-        lines.push(Line::from(""));
+        let task_history_label = "Task history:";
         lines.push(Line::from(vec![
-            "    Iterate more: ".into(),
+            "  ".into(),
+            format!("{task_history_label:<label_width$}").into(),
+            "  ".into(),
+            self.user_prompt_file.to_string_lossy().to_string().cyan(),
+        ]));
+
+        lines.push(Line::from(vec![
+            "  ".into(),
+            format!("{loop_label:<label_width$}").into(),
+            "  ".into(),
             resume_command.cyan(),
         ]));
 
         lines
     }
-}
-
-fn potter_project_succeeded_separator(width: u16) -> Line<'static> {
-    let style = Style::default().fg(secondary_color());
-    Line::from("─".repeat(width as usize)).style(style)
 }
 
 fn short_git_commit(commit: &str) -> String {

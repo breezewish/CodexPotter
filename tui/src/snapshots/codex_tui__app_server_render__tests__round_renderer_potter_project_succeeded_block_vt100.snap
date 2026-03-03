@@ -1,7 +1,12 @@
 ---
 source: tui/src/app_server_render.rs
+assertion_line: 3782
 expression: terminal.backend().vt100().screen().contents()
 ---
+
+
+
+
 
 
 
@@ -16,12 +21,8 @@ expression: terminal.backend().vt100().screen().contents()
 
 • - Finished the project.
 
-────────────────────────────────────────────────────────────────────────────────
+─ CodexPotter summary: 4 rounds in 24m 34s ─────────────────────────────────────
 
-  CodexPotter summary: iterated 4 rounds in 24m 34s.
-
-    Task history: .codexpotter/projects/2026/02/01/11/MAIN.md
-
-    Git:          fb827a2 -> 662d232
-
-    Iterate more: codex-potter resume 2026/02/01/11
+  Git:               fb827a2 -> 662d232
+  Task history:      .codexpotter/projects/2026/02/01/11/MAIN.md
+  Loop more rounds:  codex-potter resume 2026/02/01/11

@@ -13,7 +13,7 @@ Recommended reading order (new contributors):
    behavior, and how to run tests/snapshots.
 7. `cli.md` - `codex-potter` CLI behavior and multi-round control flow.
 8. `resume.md` - `codex-potter resume`: history replay, action picker, and required artifacts.
-9. `tui-design.md` - Render-only TUI behavior: bottom pane, output folding, token usage indicator,
+9. `tui-design.md` - Round renderer TUI behavior: bottom pane, output folding, token usage indicator,
    and status header updates.
 10. `file-search.md` - How `@` file search works (session orchestration + popup insertion).
 11. `tui-chat-composer.md` - Bottom-pane input state machine notes (`ChatComposer`).

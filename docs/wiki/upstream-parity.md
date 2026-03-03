@@ -30,7 +30,7 @@ The simplest rule that scales:
 Examples of **potter-only** surfaces that are expected to diverge:
 
 - `cli/` (crate `codex-potter-cli`) and its prompt templates under `cli/prompts/`
-- potter-only protocol events in `protocol/src/protocol.rs` (session/round markers)
+- potter-only protocol events in `protocol/src/protocol.rs` (project/round markers)
 - `tui/src/potter_tui.rs` (terminal lifetime wrapper and potter-specific glue)
 
 Examples of **upstream-derived** surfaces that should remain close to upstream:
@@ -76,10 +76,9 @@ A lightweight way to do this is:
 
 These are patterns you will see repeatedly; treat them as design constraints:
 
-- **Render-only TUI**: `codex-potter` uses a reduced subset of the upstream TUI and intentionally
-  avoids interactive flows that require multi-turn state (session selection, approvals UI, etc.).
+- **Round renderer TUI**: `codex-potter` uses a reduced subset of the upstream TUI and intentionally
+  avoids interactive flows that require multi-turn state (thread selection, approvals UI, etc.).
 - **Non-interactive approvals**: the runner uses `approvalPolicy: "never"` and auto-accepts known
   approval requests to avoid hanging.
 - **Filesystem-as-memory**: durable state is the repository + a progress file; each round is a
-  fresh app-server thread, not a continued conversation context.
-
+  fresh app-server Codex session (thread), not a continued conversation context.

@@ -4399,7 +4399,7 @@ mod tests {
         let (mut proc, mut rx) = make_round_renderer_processor_without_prompt();
 
         proc.handle_codex_event(Event {
-            id: "potter-session-started".into(),
+            id: "potter-project-started".into(),
             msg: EventMsg::PotterProjectStarted {
                 user_message: Some("test prompt".to_string()),
                 working_dir: PathBuf::from("/workdir"),

@@ -239,7 +239,7 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    /// Set the start time for the current CodexPotter project/session.
+    /// Set the start time for the current CodexPotter project.
     ///
     /// When configured, the live status indicator renders a dim elapsed timer after the round
     /// prefix (e.g. `Round 3/10 (4m 13s) · ...`).

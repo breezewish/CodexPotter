@@ -105,7 +105,7 @@ impl StatusIndicatorWidget {
     /// Configure an additional elapsed timer shown after the header prefix (when present).
     ///
     /// This is primarily used by `codex-potter` to display the total elapsed time since the
-    /// current project/session started, while still keeping the existing per-turn timer.
+    /// current project started, while still keeping the existing per-turn timer.
     pub fn set_header_prefix_elapsed_start(&mut self, started_at: Option<Instant>) {
         self.header_prefix_elapsed_offset =
             started_at.map(|started_at| self.last_resume_at.saturating_duration_since(started_at));

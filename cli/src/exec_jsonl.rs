@@ -237,7 +237,6 @@ pub enum WebSearchAction {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct WebSearchItem {
-    pub id: String,
     pub query: String,
     pub action: WebSearchAction,
 }
@@ -459,9 +458,8 @@ impl ExecJsonlEventProcessor {
             EventMsg::PlanUpdate(args) => self.handle_plan_update(args),
             EventMsg::WebSearchEnd(ev) => vec![ExecJsonlEvent::ItemCompleted(ItemCompletedEvent {
                 item: ThreadItem {
-                    id: self.next_item_id(),
+                    id: ev.call_id.clone(),
                     details: ThreadItemDetails::WebSearch(WebSearchItem {
-                        id: ev.call_id.clone(),
                         query: ev.query.clone(),
                         action: WebSearchAction::Other,
                     }),
@@ -1585,5 +1583,23 @@ mod tests {
             receiver_agent_role: None,
             status: codex_protocol::protocol::AgentStatus::Shutdown,
         }));
+    }
+
+    #[test]
+    fn web_search_other_action_serializes_in_jsonl_schema() {
+        let event = ExecJsonlEvent::ItemCompleted(ItemCompletedEvent {
+            item: ThreadItem {
+                id: "ws-1".to_string(),
+                details: ThreadItemDetails::WebSearch(WebSearchItem {
+                    query: "query".to_string(),
+                    action: WebSearchAction::Other,
+                }),
+            },
+        });
+
+        let json = serde_json::to_string(&event).expect("serialize web_search event");
+        let parsed =
+            serde_json::from_str::<ExecJsonlEvent>(&json).expect("deserialize web_search event");
+        assert_eq!(parsed, event);
     }
 }

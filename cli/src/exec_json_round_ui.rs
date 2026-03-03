@@ -80,6 +80,57 @@ impl<W: Write> ExecJsonRoundUi<W> {
         Ok(())
     }
 
+    fn fail_fast_with_error(&mut self, message: String) -> anyhow::Result<AppExitInfo> {
+        self.write_jsonl_event(&crate::exec_jsonl::ExecJsonlEvent::Error(
+            crate::exec_jsonl::ThreadErrorEvent {
+                message: message.clone(),
+            },
+        ))?;
+        self.synthesize_round_fatal_closure(&message)?;
+        Ok(AppExitInfo {
+            token_usage: self.token_usage.clone(),
+            thread_id: self.thread_id,
+            exit_reason: ExitReason::Fatal(message),
+        })
+    }
+
+    fn process_event(&mut self, event: &Event) -> anyhow::Result<Option<AppExitInfo>> {
+        match &event.msg {
+            EventMsg::RequestUserInput(ev) => {
+                let message = format!(
+                    "unsupported interactive request: RequestUserInput call_id={}",
+                    ev.call_id
+                );
+                return Ok(Some(self.fail_fast_with_error(message)?));
+            }
+            EventMsg::ElicitationRequest(ev) => {
+                let message = format!(
+                    "unsupported interactive request: ElicitationRequest server_name={} request_id={}",
+                    ev.server_name, ev.id
+                );
+                return Ok(Some(self.fail_fast_with_error(message)?));
+            }
+            _ => {}
+        }
+
+        let exit_reason = match &event.msg {
+            EventMsg::PotterRoundFinished { outcome } => Some(exit_reason_from_outcome(outcome)),
+            _ => None,
+        };
+
+        self.handle_codex_event(event)?;
+
+        let Some(exit_reason) = exit_reason else {
+            return Ok(None);
+        };
+
+        Ok(Some(AppExitInfo {
+            token_usage: self.token_usage.clone(),
+            thread_id: self.thread_id,
+            exit_reason,
+        }))
+    }
+
     fn synthesize_round_fatal_closure(&mut self, message: &str) -> anyhow::Result<()> {
         if self.json_turn_open {
             let event =
@@ -139,8 +190,29 @@ impl<W: Write> crate::round_runner::PotterRoundUi for ExecJsonRoundUi<W> {
                 .map_err(|_| anyhow::anyhow!("codex op channel closed"))?;
 
             loop {
+                while let Ok(event) = codex_event_rx.try_recv() {
+                    if let Some(exit_info) = self.process_event(&event)? {
+                        return Ok(exit_info);
+                    }
+                }
+
+                if let Ok(message) = fatal_exit_rx.try_recv() {
+                    self.synthesize_round_fatal_closure(&message)?;
+                    return Ok(AppExitInfo {
+                        token_usage: self.token_usage.clone(),
+                        thread_id: self.thread_id,
+                        exit_reason: ExitReason::Fatal(message),
+                    });
+                }
+
                 tokio::select! {
                     Some(message) = fatal_exit_rx.recv() => {
+                        while let Ok(event) = codex_event_rx.try_recv() {
+                            if let Some(exit_info) = self.process_event(&event)? {
+                                return Ok(exit_info);
+                            }
+                        }
+
                         self.synthesize_round_fatal_closure(&message)?;
                         return Ok(AppExitInfo {
                             token_usage: self.token_usage.clone(),
@@ -159,37 +231,8 @@ impl<W: Write> crate::round_runner::PotterRoundUi for ExecJsonRoundUi<W> {
                             });
                         };
 
-                        if let EventMsg::RequestUserInput(ev) = &event.msg {
-                            let message = format!(
-                                "unsupported interactive request: RequestUserInput call_id={}",
-                                ev.call_id
-                            );
-                            self.write_jsonl_event(&crate::exec_jsonl::ExecJsonlEvent::Error(
-                                crate::exec_jsonl::ThreadErrorEvent {
-                                    message: message.clone(),
-                                },
-                            ))?;
-                            self.synthesize_round_fatal_closure(&message)?;
-                            return Ok(AppExitInfo {
-                                token_usage: self.token_usage.clone(),
-                                thread_id: self.thread_id,
-                                exit_reason: ExitReason::Fatal(message),
-                            });
-                        }
-
-                        let exit_reason = match &event.msg {
-                            EventMsg::PotterRoundFinished { outcome } => Some(exit_reason_from_outcome(outcome)),
-                            _ => None,
-                        };
-
-                        self.handle_codex_event(&event)?;
-
-                        if let Some(exit_reason) = exit_reason {
-                            return Ok(AppExitInfo {
-                                token_usage: self.token_usage.clone(),
-                                thread_id: self.thread_id,
-                                exit_reason,
-                            });
+                        if let Some(exit_info) = self.process_event(&event)? {
+                            return Ok(exit_info);
                         }
                     }
                 }
@@ -204,5 +247,201 @@ fn exit_reason_from_outcome(outcome: &PotterRoundOutcome) -> ExitReason {
         PotterRoundOutcome::UserRequested => ExitReason::UserRequested,
         PotterRoundOutcome::TaskFailed { message } => ExitReason::TaskFailed(message.clone()),
         PotterRoundOutcome::Fatal { message } => ExitReason::Fatal(message.clone()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::round_runner::PotterRoundUi;
+    use codex_protocol::approvals::ElicitationRequestEvent;
+    use codex_protocol::mcp::RequestId;
+    use codex_protocol::protocol::TurnStartedEvent;
+    use pretty_assertions::assert_eq;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    #[tokio::test]
+    async fn elicitation_request_fails_fast_with_closure_events() {
+        let (codex_op_tx, mut codex_op_rx) = unbounded_channel::<Op>();
+        let (codex_event_tx, codex_event_rx) = unbounded_channel::<Event>();
+        let (_fatal_exit_tx, fatal_exit_rx) = unbounded_channel::<String>();
+
+        codex_event_tx
+            .send(Event {
+                id: "round-start".to_string(),
+                msg: EventMsg::PotterRoundStarted {
+                    current: 1,
+                    total: 3,
+                },
+            })
+            .expect("send PotterRoundStarted");
+        codex_event_tx
+            .send(Event {
+                id: "turn-start".to_string(),
+                msg: EventMsg::TurnStarted(TurnStartedEvent {
+                    turn_id: "turn-1".to_string(),
+                    model_context_window: None,
+                }),
+            })
+            .expect("send TurnStarted");
+        codex_event_tx
+            .send(Event {
+                id: "elicitation".to_string(),
+                msg: EventMsg::ElicitationRequest(ElicitationRequestEvent {
+                    server_name: "mcp-server".to_string(),
+                    id: RequestId::String("req-1".to_string()),
+                    message: "need input".to_string(),
+                }),
+            })
+            .expect("send ElicitationRequest");
+        drop(codex_event_tx);
+
+        let mut ui = ExecJsonRoundUi::new(Vec::new(), PathBuf::from("/tmp"));
+        let exit_info = ui
+            .render_round(codex_tui::RenderRoundParams {
+                prompt: "Continue working according to the WORKFLOW_INSTRUCTIONS".to_string(),
+                pad_before_first_cell: false,
+                prompt_footer: codex_tui::PromptFooterContext::new(PathBuf::from("."), None),
+                codex_op_tx,
+                codex_event_rx,
+                fatal_exit_rx,
+            })
+            .await
+            .expect("render_round");
+
+        let op = codex_op_rx.try_recv().expect("expected Op::UserInput");
+        assert!(matches!(op, Op::UserInput { .. }));
+
+        let ExitReason::Fatal(message) = &exit_info.exit_reason else {
+            panic!("expected fatal exit, got: {:?}", exit_info.exit_reason);
+        };
+        assert!(
+            message.contains("ElicitationRequest"),
+            "message should mention ElicitationRequest"
+        );
+
+        let output = String::from_utf8(ui.into_output()).expect("utf8");
+        let events = output
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(serde_json::from_str::<crate::exec_jsonl::ExecJsonlEvent>)
+            .collect::<Result<Vec<_>, _>>()
+            .expect("parse JSONL");
+
+        let expected_error_message = "unsupported interactive request: ElicitationRequest server_name=mcp-server request_id=req-1".to_string();
+        assert_eq!(
+            events,
+            vec![
+                crate::exec_jsonl::ExecJsonlEvent::PotterRoundStarted(
+                    crate::exec_jsonl::PotterRoundStartedEvent {
+                        current: 1,
+                        total: 3
+                    }
+                ),
+                crate::exec_jsonl::ExecJsonlEvent::TurnStarted(
+                    crate::exec_jsonl::TurnStartedEvent {}
+                ),
+                crate::exec_jsonl::ExecJsonlEvent::Error(crate::exec_jsonl::ThreadErrorEvent {
+                    message: expected_error_message.clone(),
+                }),
+                crate::exec_jsonl::ExecJsonlEvent::TurnFailed(crate::exec_jsonl::TurnFailedEvent {
+                    error: crate::exec_jsonl::ThreadErrorEvent {
+                        message: expected_error_message.clone(),
+                    },
+                }),
+                crate::exec_jsonl::ExecJsonlEvent::PotterRoundCompleted(
+                    crate::exec_jsonl::PotterRoundCompletedEvent {
+                        outcome: crate::exec_jsonl::PotterRoundCompletedOutcome::Fatal,
+                        message: Some(expected_error_message),
+                    }
+                ),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn fatal_exit_drains_queued_events_before_synthesized_closure() {
+        let (codex_op_tx, mut codex_op_rx) = unbounded_channel::<Op>();
+        let (codex_event_tx, codex_event_rx) = unbounded_channel::<Event>();
+        let (fatal_exit_tx, fatal_exit_rx) = unbounded_channel::<String>();
+
+        codex_event_tx
+            .send(Event {
+                id: "round-start".to_string(),
+                msg: EventMsg::PotterRoundStarted {
+                    current: 1,
+                    total: 3,
+                },
+            })
+            .expect("send PotterRoundStarted");
+        codex_event_tx
+            .send(Event {
+                id: "turn-start".to_string(),
+                msg: EventMsg::TurnStarted(TurnStartedEvent {
+                    turn_id: "turn-1".to_string(),
+                    model_context_window: None,
+                }),
+            })
+            .expect("send TurnStarted");
+        fatal_exit_tx
+            .send("fatal exit".to_string())
+            .expect("send fatal exit");
+        drop(codex_event_tx);
+        drop(fatal_exit_tx);
+
+        let mut ui = ExecJsonRoundUi::new(Vec::new(), PathBuf::from("/tmp"));
+        let exit_info = ui
+            .render_round(codex_tui::RenderRoundParams {
+                prompt: "Continue working according to the WORKFLOW_INSTRUCTIONS".to_string(),
+                pad_before_first_cell: false,
+                prompt_footer: codex_tui::PromptFooterContext::new(PathBuf::from("."), None),
+                codex_op_tx,
+                codex_event_rx,
+                fatal_exit_rx,
+            })
+            .await
+            .expect("render_round");
+
+        let op = codex_op_rx.try_recv().expect("expected Op::UserInput");
+        assert!(matches!(op, Op::UserInput { .. }));
+
+        let ExitReason::Fatal(message) = &exit_info.exit_reason else {
+            panic!("expected fatal exit, got: {:?}", exit_info.exit_reason);
+        };
+        assert_eq!(message, "fatal exit");
+
+        let output = String::from_utf8(ui.into_output()).expect("utf8");
+        let events = output
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(serde_json::from_str::<crate::exec_jsonl::ExecJsonlEvent>)
+            .collect::<Result<Vec<_>, _>>()
+            .expect("parse JSONL");
+
+        assert_eq!(
+            events,
+            vec![
+                crate::exec_jsonl::ExecJsonlEvent::PotterRoundStarted(
+                    crate::exec_jsonl::PotterRoundStartedEvent {
+                        current: 1,
+                        total: 3
+                    }
+                ),
+                crate::exec_jsonl::ExecJsonlEvent::TurnStarted(
+                    crate::exec_jsonl::TurnStartedEvent {}
+                ),
+                crate::exec_jsonl::ExecJsonlEvent::TurnFailed(crate::exec_jsonl::TurnFailedEvent {
+                    error: crate::exec_jsonl::ThreadErrorEvent {
+                        message: "fatal exit".to_string(),
+                    },
+                }),
+                crate::exec_jsonl::ExecJsonlEvent::PotterRoundCompleted(
+                    crate::exec_jsonl::PotterRoundCompletedEvent {
+                        outcome: crate::exec_jsonl::PotterRoundCompletedOutcome::Fatal,
+                        message: Some("fatal exit".to_string()),
+                    }
+                ),
+            ]
+        );
     }
 }

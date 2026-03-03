@@ -25,7 +25,7 @@ This is developer-facing documentation. Start at `docs/wiki/README.md` for the w
    - `.codexpotter/projects/YYYY/MM/DD/N/MAIN.md` (progress file)
    - a gitignored knowledge base directory (scratchpad for intermediate findings)
 4. Runs up to N rounds (default 10). Each round:
-   - starts a fresh `codex app-server` (one app-server thread + one `turn/start`)
+   - starts a fresh `codex app-server` (one app-server thread + at least one `turn/start`; stream recovery may issue additional `turn/start` calls)
    - injects a fixed developer prompt pointing at the progress file
    - submits a fixed prompt: `Continue working according to the WORKFLOW_INSTRUCTIONS`
 5. Stops early for the current project if the progress file front matter contains `finite_incantatem: true`

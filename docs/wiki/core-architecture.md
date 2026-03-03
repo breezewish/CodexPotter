@@ -5,7 +5,7 @@ process and uses the filesystem (not conversation history) as durable memory.
 
 The key idea is:
 
-- each round is a single "turn" in a fresh Codex thread
+- each round starts a turn in a fresh Codex thread (and may start additional turns during stream recovery)
 - the agent is instructed to read and update a progress file under `.codexpotter/`
 - `codex-potter` renders the streamed events with a legacy Codex TUI formatting pipeline
 
@@ -103,6 +103,9 @@ Terminology used by `codex-potter`:
 
 - **Project**: one user goal (one progress file). Created once per user prompt.
 - **Round**: one `codex app-server` process invocation. A project runs up to `--rounds` rounds.
+- **Codex session**: upstream app-server thread id created by `thread/start` / `thread/resume`
+  (surfaced as `EventMsg::SessionConfigured.session_id` and stored in `potter-rollout.jsonl` as
+  `thread_id`).
 - **Turn**: in upstream app-server terms, one `turn/start` call. `codex-potter` typically runs one
   turn per round; on retryable stream/network errors it may issue a follow-up `continue` (another
   `turn/start`) within the same round.

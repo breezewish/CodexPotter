@@ -75,9 +75,9 @@ Run the workflow below to make steady progress toward the overall goal recorded 
 - KB files may be stale; **code is the source of truth**—update KB promptly when conflicts are found.
 - No need to commit KB files.
 
-**Before you provide the final response when all tasks are done or the project is skipped:**
+**When all tasks are done or the project is skipped:**
 
-- Mark progress file's `finite_incantatem` to true if you have not changed any file since you received this workflow instruction.
-  (updating progress files or files under `.codexpotter/kb` does not count as "changing any file")
+- Mark progress file's `finite_incantatem` to true ONLY IF you have not changed any file or code since you received this workflow instruction.
+  (updating progress files or files under `.codexpotter/kb` doesn't matter, but any other file changes indicate you have done some work, so `finite_incantatem` should be kept false)
 
 </WORKFLOW_INSTRUCTIONS>

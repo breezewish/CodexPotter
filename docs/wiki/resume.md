@@ -28,7 +28,7 @@ Picker shortcuts:
 - Search: type to filter (matches user request, git branch, and project path), `Backspace` deletes
 - Sort: `Tab` toggles `Updated` / `Created` (newest first)
 - Confirm: `Enter` resumes the selected project
-- Cancel: `Esc` starts a new session; `Ctrl+C` quits
+- Cancel: `Esc` starts a new project; `Ctrl+C` quits
 
 When `PROJECT_PATH` is provided, it is resolved to a unique progress file (`.../MAIN.md`). See
 `cli.md` for the full resolution algorithm.
@@ -51,16 +51,16 @@ Projects created before `potter-rollout.jsonl` was introduced are currently unsu
 
 Replay is driven by `potter-rollout.jsonl` (`cli/src/resume.rs`):
 
-- `session_started`: injects `EventMsg::PotterSessionStarted` (once at the top).
+- `project_started`: injects `EventMsg::PotterProjectStarted` (once at the top).
 - `round_started`: injects `EventMsg::PotterRoundStarted` (updates the live status banner prefix).
 - `round_configured`: triggers replay of the referenced upstream rollout file.
-- `session_succeeded` / `round_finished`: injects terminal summary + control-plane boundaries.
+- `project_succeeded` / `round_finished`: injects terminal summary + control-plane boundaries.
 
 ### Unfinished rounds (EOF without `round_finished`)
 
 `potter-rollout.jsonl` is append-only and may end in the middle of a round (e.g. after
 `round_configured` but before a trailing `round_finished`). In that case, `resume` still replays
-the **session started** and **round started** context events *before* showing the action picker,
+the **project started** and **round started** context events *before* showing the action picker,
 so the user always sees the initial prompt and round context first.
 
 Implementation detail (`cli/src/resume.rs`): the pre-action replay for an unfinished round includes
@@ -114,8 +114,8 @@ Key behavior:
 - The progress file front matter is updated first: `finite_incantatem` is reset to `false` so the
   normal runner does not stop immediately after the next round.
 - The continue budget is `--rounds` (default: 10) rounds, counted from the resume action.
-- `potter-rollout.jsonl` is append-only; `session_started` is not written again.
-- New upstream rollouts are started via fresh app-server threads, just like a normal session.
+- `potter-rollout.jsonl` is append-only; `project_started` is not written again.
+- New upstream rollouts are started via fresh app-server threads, just like a normal project.
 
 When resuming an unfinished round, CodexPotter resumes the existing upstream thread (recorded in
 `potter-rollout.jsonl`) and sends a `Continue` prompt to complete the current round, then starts

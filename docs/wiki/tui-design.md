@@ -75,7 +75,7 @@ Cross-round persistence:
 
 - `tui/src/potter_tui.rs`: `CodexPotterTui` stores a `VecDeque<String>` of queued prompts and passes
   it into / out of the render-only runner so queued prompts survive across rounds.
-- `cli/src/main.rs`: after the current session ends, queued prompts are treated as **new sessions**
+- `cli/src/main.rs`: after the current project ends, queued prompts are treated as **new projects**
   (new `.codexpotter/projects/...` directories) rather than continuing the same context.
 
 ### External editor (`ctrl+g`)

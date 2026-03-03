@@ -413,8 +413,8 @@ where
             let remaining_after_continue = remaining_rounds.saturating_sub(1);
 
             let mut replay_event_msgs = Vec::new();
-            if let Some((user_message, user_prompt_file)) = unfinished.session_started {
-                replay_event_msgs.push(EventMsg::PotterSessionStarted {
+            if let Some((user_message, user_prompt_file)) = unfinished.project_started {
+                replay_event_msgs.push(EventMsg::PotterProjectStarted {
                     user_message,
                     working_dir: resolved.workdir.clone(),
                     project_dir: resolved.project_dir.clone(),
@@ -439,7 +439,7 @@ where
                         pad_before_first_cell: true,
                         round_current: unfinished.round_current,
                         round_total: unfinished.round_total,
-                        session_succeeded_rounds: baseline_rounds_u32.saturating_add(1),
+                        project_succeeded_rounds: baseline_rounds_u32.saturating_add(1),
                         resume_thread_id: unfinished.thread_id,
                         replay_event_msgs,
                     },
@@ -460,7 +460,7 @@ where
                 let current_round = unfinished
                     .round_current
                     .saturating_add(u32::try_from(offset.saturating_add(1)).unwrap_or(u32::MAX));
-                let session_succeeded_rounds = baseline_rounds_u32
+                let project_succeeded_rounds = baseline_rounds_u32
                     .saturating_add(u32::try_from(offset.saturating_add(2)).unwrap_or(u32::MAX));
                 let round_result = round_runner
                     .run_round(
@@ -468,10 +468,10 @@ where
                         &round_context,
                         crate::round_runner::PotterRoundOptions {
                             pad_before_first_cell: true,
-                            session_started: None,
+                            project_started: None,
                             round_current: current_round,
                             round_total: unfinished.round_total,
-                            session_succeeded_rounds,
+                            project_succeeded_rounds,
                         },
                     )
                     .await?;
@@ -491,17 +491,17 @@ where
             let iterate_rounds_u32 = u32::try_from(iterate_rounds_usize).unwrap_or(u32::MAX);
             for offset in 0..iterate_rounds_usize {
                 let current_round = u32::try_from(offset.saturating_add(1)).unwrap_or(u32::MAX);
-                let session_succeeded_rounds = baseline_rounds_u32.saturating_add(current_round);
+                let project_succeeded_rounds = baseline_rounds_u32.saturating_add(current_round);
                 let round_result = round_runner
                     .run_round(
                         ui,
                         &round_context,
                         crate::round_runner::PotterRoundOptions {
                             pad_before_first_cell: true,
-                            session_started: None,
+                            project_started: None,
                             round_current: current_round,
                             round_total: iterate_rounds_u32,
-                            session_succeeded_rounds,
+                            project_succeeded_rounds,
                         },
                     )
                     .await?;
@@ -642,7 +642,7 @@ struct UnfinishedRoundPlan {
     round_total: u32,
     thread_id: codex_protocol::ThreadId,
     rollout_path: PathBuf,
-    session_started: Option<(Option<String>, PathBuf)>,
+    project_started: Option<(Option<String>, PathBuf)>,
 }
 
 impl UnfinishedRoundPlan {
@@ -688,16 +688,16 @@ fn build_round_replay_plans(
 ) -> anyhow::Result<ResumeReplayPlans> {
     let index = crate::potter_rollout_resume_index::build_resume_index(potter_rollout_lines)?;
 
-    let mut session_started = Some(index.session_started);
+    let mut project_started = Some(index.project_started);
     let mut rounds = Vec::new();
 
     for round in index.completed_rounds {
         let mut events = Vec::new();
         if rounds.is_empty() {
-            let started = session_started
+            let started = project_started
                 .take()
-                .context("potter-rollout: missing session_started before first round")?;
-            events.push(EventMsg::PotterSessionStarted {
+                .context("potter-rollout: missing project_started before first round")?;
+            events.push(EventMsg::PotterProjectStarted {
                 user_message: started.user_message,
                 working_dir: project.workdir.clone(),
                 project_dir: project.project_dir.clone(),
@@ -721,13 +721,13 @@ fn build_round_replay_plans(
             .with_context(|| format!("replay rollout {}", rollout_path.display()))?;
         events.append(&mut rollout_events);
 
-        if let Some(session_succeeded) = round.session_succeeded {
-            events.push(EventMsg::PotterSessionSucceeded {
-                rounds: session_succeeded.rounds,
-                duration: std::time::Duration::from_secs(session_succeeded.duration_secs),
-                user_prompt_file: session_succeeded.user_prompt_file,
-                git_commit_start: session_succeeded.git_commit_start,
-                git_commit_end: session_succeeded.git_commit_end,
+        if let Some(project_succeeded) = round.project_succeeded {
+            events.push(EventMsg::PotterProjectSucceeded {
+                rounds: project_succeeded.rounds,
+                duration: std::time::Duration::from_secs(project_succeeded.duration_secs),
+                user_prompt_file: project_succeeded.user_prompt_file,
+                git_commit_start: project_succeeded.git_commit_start,
+                git_commit_end: project_succeeded.git_commit_end,
             });
         }
 
@@ -746,7 +746,7 @@ fn build_round_replay_plans(
         round_total: round.round_total,
         thread_id: round.thread_id,
         rollout_path: resolve_rollout_path_for_replay(project, &round.rollout_path),
-        session_started: session_started
+        project_started: project_started
             .map(|started| (started.user_message, started.user_prompt_file)),
     });
 
@@ -907,8 +907,8 @@ fn build_unfinished_round_pre_action_events(
     unfinished: &mut UnfinishedRoundPlan,
 ) -> Vec<EventMsg> {
     let mut events = Vec::new();
-    if let Some((user_message, user_prompt_file)) = unfinished.session_started.take() {
-        events.push(EventMsg::PotterSessionStarted {
+    if let Some((user_message, user_prompt_file)) = unfinished.project_started.take() {
+        events.push(EventMsg::PotterProjectStarted {
             user_message,
             working_dir: project.workdir.clone(),
             project_dir: project.project_dir.clone(),
@@ -1234,12 +1234,12 @@ mod tests {
         let potter_rollout_path = crate::potter_rollout::potter_rollout_path(&resolved.project_dir);
         crate::potter_rollout::append_line(
             &potter_rollout_path,
-            &crate::potter_rollout::PotterRolloutLine::SessionStarted {
+            &crate::potter_rollout::PotterRolloutLine::ProjectStarted {
                 user_message: Some("hello".to_string()),
                 user_prompt_file: PathBuf::from(".codexpotter/projects/2026/02/01/1/MAIN.md"),
             },
         )
-        .expect("append session_started");
+        .expect("append project_started");
         crate::potter_rollout::append_line(
             &potter_rollout_path,
             &crate::potter_rollout::PotterRolloutLine::RoundStarted {
@@ -1496,7 +1496,7 @@ mod tests {
             codex_protocol::ThreadId::from_string("019ca423-63d9-7641-ae83-db060ad3c000")
                 .expect("thread id");
         let potter_rollout_lines = vec![
-            crate::potter_rollout::PotterRolloutLine::SessionStarted {
+            crate::potter_rollout::PotterRolloutLine::ProjectStarted {
                 user_message: Some("hello".to_string()),
                 user_prompt_file: PathBuf::from(".codexpotter/projects/2026/02/01/1/MAIN.md"),
             },
@@ -1526,7 +1526,7 @@ mod tests {
         );
         assert_eq!(unfinished.remaining_rounds_including_current().unwrap(), 10);
         assert_eq!(
-            unfinished.session_started,
+            unfinished.project_started,
             Some((
                 Some("hello".to_string()),
                 PathBuf::from(".codexpotter/projects/2026/02/01/1/MAIN.md"),
@@ -1535,7 +1535,7 @@ mod tests {
     }
 
     #[test]
-    fn build_round_replay_plans_consumes_session_started_in_first_completed_round() {
+    fn build_round_replay_plans_consumes_project_started_in_first_completed_round() {
         let temp = tempfile::tempdir().expect("tempdir");
         let _main = write_main(temp.path(), ".codexpotter/projects/2026/02/01/1");
         let resolved =
@@ -1551,7 +1551,7 @@ mod tests {
                 .expect("next thread id");
 
         let potter_rollout_lines = vec![
-            crate::potter_rollout::PotterRolloutLine::SessionStarted {
+            crate::potter_rollout::PotterRolloutLine::ProjectStarted {
                 user_message: Some("hello".to_string()),
                 user_prompt_file: PathBuf::from(".codexpotter/projects/2026/02/01/1/MAIN.md"),
             },
@@ -1585,7 +1585,7 @@ mod tests {
         assert_eq!(plans.completed_rounds.len(), 1);
 
         let unfinished = plans.unfinished_round.expect("unfinished round");
-        assert_eq!(unfinished.session_started, None);
+        assert_eq!(unfinished.project_started, None);
     }
 
     #[test]
@@ -1596,7 +1596,7 @@ mod tests {
             resolve_project_paths(temp.path(), Path::new("2026/02/01/1")).expect("resolve");
 
         let potter_rollout_lines = vec![
-            crate::potter_rollout::PotterRolloutLine::SessionStarted {
+            crate::potter_rollout::PotterRolloutLine::ProjectStarted {
                 user_message: Some("hello".to_string()),
                 user_prompt_file: PathBuf::from(".codexpotter/projects/2026/02/01/1/MAIN.md"),
             },
@@ -1616,7 +1616,7 @@ mod tests {
     }
 
     #[test]
-    fn build_unfinished_round_pre_action_events_replays_session_started_once() {
+    fn build_unfinished_round_pre_action_events_replays_project_started_once() {
         let temp = tempfile::tempdir().expect("tempdir");
         let _main = write_main(temp.path(), ".codexpotter/projects/2026/02/01/1");
         let resolved =
@@ -1630,7 +1630,7 @@ mod tests {
             round_total: 10,
             thread_id,
             rollout_path: resolved.workdir.join("rollout.jsonl"),
-            session_started: Some((
+            project_started: Some((
                 Some("hello".to_string()),
                 PathBuf::from(".codexpotter/projects/2026/02/01/1/MAIN.md"),
             )),
@@ -1638,16 +1638,16 @@ mod tests {
 
         let events = build_unfinished_round_pre_action_events(&resolved, &mut unfinished);
 
-        assert_eq!(unfinished.session_started, None);
+        assert_eq!(unfinished.project_started, None);
         assert_eq!(events.len(), 3);
-        let EventMsg::PotterSessionStarted {
+        let EventMsg::PotterProjectStarted {
             user_message,
             working_dir,
             project_dir,
             user_prompt_file,
         } = &events[0]
         else {
-            panic!("expected PotterSessionStarted, got: {:?}", events[0]);
+            panic!("expected PotterProjectStarted, got: {:?}", events[0]);
         };
         assert_eq!(user_message.as_deref(), Some("hello"));
         assert_eq!(working_dir, &resolved.workdir);
@@ -1669,7 +1669,7 @@ mod tests {
     }
 
     #[test]
-    fn build_unfinished_round_pre_action_events_skips_when_session_started_already_consumed() {
+    fn build_unfinished_round_pre_action_events_skips_when_project_started_already_consumed() {
         let temp = tempfile::tempdir().expect("tempdir");
         let _main = write_main(temp.path(), ".codexpotter/projects/2026/02/01/1");
         let resolved =
@@ -1683,12 +1683,12 @@ mod tests {
             round_total: 10,
             thread_id,
             rollout_path: resolved.workdir.join("rollout.jsonl"),
-            session_started: None,
+            project_started: None,
         };
 
         let events = build_unfinished_round_pre_action_events(&resolved, &mut unfinished);
 
-        assert_eq!(unfinished.session_started, None);
+        assert_eq!(unfinished.project_started, None);
         assert_eq!(events.len(), 2);
 
         let EventMsg::PotterRoundStarted { current, total } = &events[0] else {

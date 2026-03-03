@@ -26,7 +26,7 @@ pub struct PotterRoundContext {
 }
 
 #[derive(Debug, Clone)]
-pub struct PotterSessionStartedInfo {
+pub struct PotterProjectStartedInfo {
     pub user_message: Option<String>,
     pub working_dir: PathBuf,
     pub project_dir: PathBuf,
@@ -36,10 +36,10 @@ pub struct PotterSessionStartedInfo {
 #[derive(Debug, Clone)]
 pub struct PotterRoundOptions {
     pub pad_before_first_cell: bool,
-    pub session_started: Option<PotterSessionStartedInfo>,
+    pub project_started: Option<PotterProjectStartedInfo>,
     pub round_current: u32,
     pub round_total: u32,
-    pub session_succeeded_rounds: u32,
+    pub project_succeeded_rounds: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -48,7 +48,7 @@ pub struct PotterContinueRoundOptions {
     pub pad_before_first_cell: bool,
     pub round_current: u32,
     pub round_total: u32,
-    pub session_succeeded_rounds: u32,
+    pub project_succeeded_rounds: u32,
     /// Existing Codex thread to resume for this unfinished round.
     pub resume_thread_id: codex_protocol::ThreadId,
     /// Persisted EventMsg items from the upstream rollout to replay before continuing.
@@ -68,10 +68,10 @@ pub async fn run_potter_round(
 ) -> anyhow::Result<PotterRoundResult> {
     let PotterRoundOptions {
         pad_before_first_cell,
-        session_started,
+        project_started,
         round_current,
         round_total,
-        session_succeeded_rounds,
+        project_succeeded_rounds,
     } = options;
 
     run_potter_round_inner(
@@ -79,10 +79,10 @@ pub async fn run_potter_round(
         context,
         PotterRoundInnerOptions {
             pad_before_first_cell,
-            session_started,
+            project_started,
             round_current,
             round_total,
-            session_succeeded_rounds,
+            project_succeeded_rounds,
             prompt: context.turn_prompt.clone(),
             resume_thread_id: None,
             record_round_started: true,
@@ -106,7 +106,7 @@ pub async fn continue_potter_round(
         pad_before_first_cell,
         round_current,
         round_total,
-        session_succeeded_rounds,
+        project_succeeded_rounds,
         resume_thread_id,
         replay_event_msgs,
     } = options;
@@ -116,10 +116,10 @@ pub async fn continue_potter_round(
         context,
         PotterRoundInnerOptions {
             pad_before_first_cell,
-            session_started: None,
+            project_started: None,
             round_current,
             round_total,
-            session_succeeded_rounds,
+            project_succeeded_rounds,
             prompt: String::from("Continue"),
             resume_thread_id: Some(resume_thread_id),
             record_round_started: false,
@@ -132,10 +132,10 @@ pub async fn continue_potter_round(
 
 struct PotterRoundInnerOptions {
     pad_before_first_cell: bool,
-    session_started: Option<PotterSessionStartedInfo>,
+    project_started: Option<PotterProjectStartedInfo>,
     round_current: u32,
     round_total: u32,
-    session_succeeded_rounds: u32,
+    project_succeeded_rounds: u32,
     prompt: String,
     resume_thread_id: Option<codex_protocol::ThreadId>,
     record_round_started: bool,
@@ -150,10 +150,10 @@ async fn run_potter_round_inner(
 ) -> anyhow::Result<PotterRoundResult> {
     let PotterRoundInnerOptions {
         pad_before_first_cell,
-        session_started,
+        project_started,
         round_current,
         round_total,
-        session_succeeded_rounds,
+        project_succeeded_rounds,
         prompt,
         resume_thread_id,
         record_round_started,
@@ -166,24 +166,24 @@ async fn run_potter_round_inner(
     let (ui_event_tx, ui_event_rx) = unbounded_channel::<Event>();
     let (fatal_exit_tx, fatal_exit_rx) = unbounded_channel::<String>();
 
-    if let Some(session_started) = session_started {
+    if let Some(project_started) = project_started {
         let _ = ui_event_tx.send(Event {
             id: "".to_string(),
-            msg: EventMsg::PotterSessionStarted {
-                user_message: session_started.user_message.clone(),
-                working_dir: session_started.working_dir,
-                project_dir: session_started.project_dir,
-                user_prompt_file: session_started.user_prompt_file.clone(),
+            msg: EventMsg::PotterProjectStarted {
+                user_message: project_started.user_message.clone(),
+                working_dir: project_started.working_dir,
+                project_dir: project_started.project_dir,
+                user_prompt_file: project_started.user_prompt_file.clone(),
             },
         });
         crate::potter_rollout::append_line(
             &context.potter_rollout_path,
-            &crate::potter_rollout::PotterRolloutLine::SessionStarted {
-                user_message: session_started.user_message,
-                user_prompt_file: session_started.user_prompt_file,
+            &crate::potter_rollout::PotterRolloutLine::ProjectStarted {
+                user_message: project_started.user_message,
+                user_prompt_file: project_started.user_prompt_file,
             },
         )
-        .context("append potter-rollout session_started")?;
+        .context("append potter-rollout project_started")?;
     }
 
     let _ = ui_event_tx.send(Event {
@@ -263,8 +263,8 @@ async fn run_potter_round_inner(
                 {
                     if let Err(err) = crate::potter_rollout::append_line(
                         &potter_rollout_path,
-                        &crate::potter_rollout::PotterRolloutLine::SessionSucceeded {
-                            rounds: session_succeeded_rounds,
+                        &crate::potter_rollout::PotterRolloutLine::ProjectSucceeded {
+                            rounds: project_succeeded_rounds,
                             duration_secs: project_started_at.elapsed().as_secs(),
                             user_prompt_file: user_prompt_file.clone(),
                             git_commit_start: git_commit_start.clone(),
@@ -279,8 +279,8 @@ async fn run_potter_round_inner(
                     }
                     let _ = ui_event_tx.send(Event {
                         id: "".to_string(),
-                        msg: EventMsg::PotterSessionSucceeded {
-                            rounds: session_succeeded_rounds,
+                        msg: EventMsg::PotterProjectSucceeded {
+                            rounds: project_succeeded_rounds,
                             duration: project_started_at.elapsed(),
                             user_prompt_file: user_prompt_file.clone(),
                             git_commit_start: git_commit_start.clone(),

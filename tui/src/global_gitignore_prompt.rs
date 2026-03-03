@@ -217,7 +217,7 @@ impl WidgetRef for &GlobalGitignorePromptScreen {
         column.push("");
         column.push(
             Line::from(
-                "This keeps your CodexPotter sessions private and prevents accidental commits.",
+                "This keeps your CodexPotter projects private and prevents accidental commits.",
             )
             .dim()
             .inset(Insets::tlbr(0, 2, 0, 0)),

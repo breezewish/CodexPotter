@@ -7,13 +7,13 @@ use crate::potter_rollout::PotterRolloutLine;
 
 #[derive(Debug, Clone)]
 pub struct PotterRolloutResumeIndex {
-    pub session_started: SessionStartedIndex,
+    pub project_started: ProjectStartedIndex,
     pub completed_rounds: Vec<CompletedRoundIndex>,
     pub unfinished_round: Option<UnfinishedRoundIndex>,
 }
 
 #[derive(Debug, Clone)]
-pub struct SessionStartedIndex {
+pub struct ProjectStartedIndex {
     pub user_message: Option<String>,
     pub user_prompt_file: PathBuf,
 }
@@ -24,7 +24,7 @@ pub struct CompletedRoundIndex {
     pub round_total: u32,
     pub thread_id: ThreadId,
     pub rollout_path: PathBuf,
-    pub session_succeeded: Option<SessionSucceededIndex>,
+    pub project_succeeded: Option<ProjectSucceededIndex>,
     pub outcome: PotterRoundOutcome,
 }
 
@@ -37,7 +37,7 @@ pub struct UnfinishedRoundIndex {
 }
 
 #[derive(Debug, Clone)]
-pub struct SessionSucceededIndex {
+pub struct ProjectSucceededIndex {
     pub rounds: u32,
     pub duration_secs: u64,
     pub user_prompt_file: PathBuf,
@@ -46,28 +46,28 @@ pub struct SessionSucceededIndex {
 }
 
 pub fn build_resume_index(lines: &[PotterRolloutLine]) -> anyhow::Result<PotterRolloutResumeIndex> {
-    let mut session_started: Option<SessionStartedIndex> = None;
+    let mut project_started: Option<ProjectStartedIndex> = None;
     let mut completed_rounds: Vec<CompletedRoundIndex> = Vec::new();
 
     struct RoundBuilder {
         round_current: u32,
         round_total: u32,
         configured: Option<(ThreadId, PathBuf)>,
-        session_succeeded: Option<SessionSucceededIndex>,
+        project_succeeded: Option<ProjectSucceededIndex>,
     }
 
     let mut current: Option<RoundBuilder> = None;
 
     for line in lines {
         match line {
-            PotterRolloutLine::SessionStarted {
+            PotterRolloutLine::ProjectStarted {
                 user_message,
                 user_prompt_file,
             } => {
-                if session_started.is_some() || !completed_rounds.is_empty() || current.is_some() {
-                    anyhow::bail!("potter-rollout: session_started must appear once at the top");
+                if project_started.is_some() || !completed_rounds.is_empty() || current.is_some() {
+                    anyhow::bail!("potter-rollout: project_started must appear once at the top");
                 }
-                session_started = Some(SessionStartedIndex {
+                project_started = Some(ProjectStartedIndex {
                     user_message: user_message.clone(),
                     user_prompt_file: user_prompt_file.clone(),
                 });
@@ -76,8 +76,8 @@ pub fn build_resume_index(lines: &[PotterRolloutLine]) -> anyhow::Result<PotterR
                 current: round_current,
                 total: round_total,
             } => {
-                if session_started.is_none() {
-                    anyhow::bail!("potter-rollout: missing session_started before first round");
+                if project_started.is_none() {
+                    anyhow::bail!("potter-rollout: missing project_started before first round");
                 }
                 if current.is_some() {
                     anyhow::bail!("potter-rollout: round_started before previous round_finished");
@@ -86,7 +86,7 @@ pub fn build_resume_index(lines: &[PotterRolloutLine]) -> anyhow::Result<PotterR
                     round_current: *round_current,
                     round_total: *round_total,
                     configured: None,
-                    session_succeeded: None,
+                    project_succeeded: None,
                 });
             }
             PotterRolloutLine::RoundConfigured {
@@ -102,7 +102,7 @@ pub fn build_resume_index(lines: &[PotterRolloutLine]) -> anyhow::Result<PotterR
                 }
                 builder.configured = Some((*thread_id, rollout_path.clone()));
             }
-            PotterRolloutLine::SessionSucceeded {
+            PotterRolloutLine::ProjectSucceeded {
                 rounds,
                 duration_secs,
                 user_prompt_file,
@@ -110,12 +110,12 @@ pub fn build_resume_index(lines: &[PotterRolloutLine]) -> anyhow::Result<PotterR
                 git_commit_end,
             } => {
                 let Some(builder) = current.as_mut() else {
-                    anyhow::bail!("potter-rollout: session_succeeded outside a round");
+                    anyhow::bail!("potter-rollout: project_succeeded outside a round");
                 };
-                if builder.session_succeeded.is_some() {
-                    anyhow::bail!("potter-rollout: duplicate session_succeeded in a single round");
+                if builder.project_succeeded.is_some() {
+                    anyhow::bail!("potter-rollout: duplicate project_succeeded in a single round");
                 }
-                builder.session_succeeded = Some(SessionSucceededIndex {
+                builder.project_succeeded = Some(ProjectSucceededIndex {
                     rounds: *rounds,
                     duration_secs: *duration_secs,
                     user_prompt_file: user_prompt_file.clone(),
@@ -135,7 +135,7 @@ pub fn build_resume_index(lines: &[PotterRolloutLine]) -> anyhow::Result<PotterR
                     round_total: builder.round_total,
                     thread_id,
                     rollout_path,
-                    session_succeeded: builder.session_succeeded,
+                    project_succeeded: builder.project_succeeded,
                     outcome: outcome.clone(),
                 });
             }
@@ -144,8 +144,8 @@ pub fn build_resume_index(lines: &[PotterRolloutLine]) -> anyhow::Result<PotterR
 
     let unfinished_round = match current.take() {
         Some(builder) => {
-            if builder.session_succeeded.is_some() {
-                anyhow::bail!("potter-rollout: session_succeeded without round_finished at EOF");
+            if builder.project_succeeded.is_some() {
+                anyhow::bail!("potter-rollout: project_succeeded without round_finished at EOF");
             }
             let Some((thread_id, rollout_path)) = builder.configured else {
                 anyhow::bail!("potter-rollout: missing round_configured at EOF");
@@ -160,16 +160,16 @@ pub fn build_resume_index(lines: &[PotterRolloutLine]) -> anyhow::Result<PotterR
         None => None,
     };
 
-    if session_started.is_some() && completed_rounds.is_empty() && unfinished_round.is_none() {
-        anyhow::bail!("potter-rollout: session_started present but no rounds found");
+    if project_started.is_some() && completed_rounds.is_empty() && unfinished_round.is_none() {
+        anyhow::bail!("potter-rollout: project_started present but no rounds found");
     }
 
-    let Some(session_started) = session_started else {
-        anyhow::bail!("potter-rollout: missing session_started before first round");
+    let Some(project_started) = project_started else {
+        anyhow::bail!("potter-rollout: missing project_started before first round");
     };
 
     Ok(PotterRolloutResumeIndex {
-        session_started,
+        project_started,
         completed_rounds,
         unfinished_round,
     })

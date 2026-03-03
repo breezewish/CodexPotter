@@ -1,6 +1,6 @@
 # Progress Files and Knowledge Base (`.codexpotter/`)
 
-`codex-potter` is designed around "filesystem as memory". Each session has a durable progress file
+`codex-potter` is designed around "filesystem as memory". Each project has a durable progress file
 that the agent reads and updates every round, plus an optional scratch knowledge base (KB)
 directory used to record intermediate findings.
 
@@ -39,20 +39,20 @@ The workflow template defines:
 - `status`: `initial` | `open` | `skip`
   - **Used by the workflow prompt** to decide whether to plan vs execute.
   - **Not currently parsed by the `codex-potter` runner** (the CLI does not read it).
-- `short_title`: short human-readable title for the session
+- `short_title`: short human-readable title for the project
   - Set during the first round (when `status: initial`).
   - **Not currently parsed by the runner**.
-- `git_commit`: git commit SHA captured when the session is created
+- `git_commit`: git commit SHA captured when the project is created
   - Empty when the working directory is not a git repo (or HEAD cannot be resolved).
   - **Not currently parsed by the runner**.
-- `git_branch`: git branch name captured when the session is created
+- `git_branch`: git branch name captured when the project is created
   - Empty when not on a branch (detached HEAD) or when the working directory is not a git repo.
   - **Not currently parsed by the runner**.
 - `finite_incantatem`: `true` | `false`
   - **The only field currently read by the runner.**
-  - When `true`, the CLI stops running additional rounds for the current session
+  - When `true`, the CLI stops running additional rounds for the current project
     (`cli/src/project.rs`: `progress_file_has_finite_incantatem_true`).
-  - Queued sessions (queued user prompts) continue normally.
+  - Queued projects (queued user prompts) continue normally.
 
 ### How the file is used at runtime
 
@@ -72,7 +72,7 @@ CodexPotter writes an additional append-only JSONL log in each project directory
 - `.codexpotter/projects/YYYY/MM/DD/N/potter-rollout.jsonl`
 
 This file is the durable index that links the project to upstream app-server rollouts and captures
-Potter-specific session/round boundary events. It is used by `codex-potter resume` to replay
+Potter-specific project/round boundary events. It is used by `codex-potter resume` to replay
 history and to continue iterating on the same project.
 
 The log is intentionally minimal: it does **not** duplicate upstream rollout content. Instead, it
@@ -83,18 +83,18 @@ the source of truth for persisted `EventMsg` items.
 
 Each line is a single JSON object (append-only). The schema is a tagged enum with `type`:
 
-- `session_started`
+- `project_started`
   - `user_message` (optional): the original user prompt text (stored verbatim for replay).
-  - `user_prompt_file`: the progress file path captured at session start.
+  - `user_prompt_file`: the progress file path captured at project start.
 - `round_started`
   - `current`: 1-based round counter shown in the UI.
-  - `total`: round budget shown in the UI for that session segment.
+  - `total`: round budget shown in the UI for that project segment.
 - `round_configured`
-  - `thread_id`: upstream app-server session/thread id.
+  - `thread_id`: upstream app-server thread id (Codex session).
   - `rollout_path`: path to the upstream rollout file (recorded as an absolute path when possible).
   - `rollout_path_raw` / `rollout_base_dir` (optional): debugging fields populated when path
     canonicalization fails.
-- `session_succeeded`
+- `project_succeeded`
   - `rounds`: number of rounds recorded for the overall project (used for summary rendering).
   - `duration_secs`: wall-clock elapsed time since the current live run started (new project or
     resume action; does not include resume replay).

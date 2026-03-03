@@ -408,11 +408,11 @@ struct RenderOnlyProcessor {
     /// Divergence (codex-potter): coalesce consecutive successful non-shell `Ran` items into one
     /// history cell.
     pending_success_ran_cell: Option<ExecCell>,
-    pending_potter_session_succeeded: Option<PendingPotterSessionSucceeded>,
+    pending_potter_project_succeeded: Option<PendingPotterProjectSucceeded>,
 }
 
 #[derive(Debug)]
-struct PendingPotterSessionSucceeded {
+struct PendingPotterProjectSucceeded {
     rounds: u32,
     duration: Duration,
     user_prompt_file: PathBuf,
@@ -441,7 +441,7 @@ impl RenderOnlyProcessor {
             current_elapsed_secs: None,
             pending_exploring_cell: None,
             pending_success_ran_cell: None,
-            pending_potter_session_succeeded: None,
+            pending_potter_project_succeeded: None,
         }
     }
 
@@ -519,7 +519,7 @@ impl RenderOnlyProcessor {
                 self.thread_id = Some(cfg.session_id);
                 self.cwd = cfg.cwd;
             }
-            EventMsg::PotterSessionStarted {
+            EventMsg::PotterProjectStarted {
                 user_message,
                 user_prompt_file,
                 ..
@@ -539,7 +539,7 @@ impl RenderOnlyProcessor {
                 self.flush_pending_success_ran_cell();
                 self.needs_final_message_separator = true;
             }
-            EventMsg::PotterSessionSucceeded {
+            EventMsg::PotterProjectSucceeded {
                 rounds,
                 duration,
                 user_prompt_file,
@@ -548,7 +548,7 @@ impl RenderOnlyProcessor {
             } => {
                 self.flush_pending_exploring_cell();
                 self.flush_pending_success_ran_cell();
-                self.pending_potter_session_succeeded = Some(PendingPotterSessionSucceeded {
+                self.pending_potter_project_succeeded = Some(PendingPotterProjectSucceeded {
                     rounds,
                     duration,
                     user_prompt_file,
@@ -559,9 +559,9 @@ impl RenderOnlyProcessor {
             EventMsg::PotterRoundFinished { .. } => {
                 self.flush_pending_exploring_cell();
                 self.flush_pending_success_ran_cell();
-                if let Some(done) = self.pending_potter_session_succeeded.take() {
+                if let Some(done) = self.pending_potter_project_succeeded.take() {
                     self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                        crate::history_cell_potter::new_potter_session_succeeded(
+                        crate::history_cell_potter::new_potter_project_succeeded(
                             done.rounds,
                             done.duration,
                             done.user_prompt_file,
@@ -640,9 +640,9 @@ impl RenderOnlyProcessor {
                 }
                 self.flush_plan_stream();
                 self.app_event_tx.send(AppEvent::StopCommitAnimation);
-                if let Some(done) = self.pending_potter_session_succeeded.take() {
+                if let Some(done) = self.pending_potter_project_succeeded.take() {
                     self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                        crate::history_cell_potter::new_potter_session_succeeded(
+                        crate::history_cell_potter::new_potter_project_succeeded(
                             done.rounds,
                             done.duration,
                             done.user_prompt_file,
@@ -3687,7 +3687,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn render_only_renders_potter_session_succeeded_block_vt100() {
+    async fn render_only_renders_potter_project_succeeded_block_vt100() {
         let width: u16 = 80;
         let height: u16 = 24;
         let backend = VT100Backend::new(width, height);
@@ -3739,7 +3739,7 @@ mod tests {
         });
         proc.handle_codex_event(Event {
             id: "potter-succeeded".into(),
-            msg: EventMsg::PotterSessionSucceeded {
+            msg: EventMsg::PotterProjectSucceeded {
                 rounds: 4,
                 duration: Duration::from_secs(24 * 60 + 34),
                 user_prompt_file: PathBuf::from(".codexpotter/projects/2026/02/01/11/MAIN.md"),
@@ -3770,7 +3770,7 @@ mod tests {
         );
 
         assert_snapshot!(
-            "render_only_potter_session_succeeded_block_vt100",
+            "render_only_potter_project_succeeded_block_vt100",
             terminal.backend().vt100().screen().contents()
         );
     }
@@ -4081,7 +4081,7 @@ mod tests {
         let mut proc = RenderOnlyProcessor::new(app_event_tx.clone());
         proc.handle_codex_event(Event {
             id: "session-start".into(),
-            msg: EventMsg::PotterSessionStarted {
+            msg: EventMsg::PotterProjectStarted {
                 user_message: None,
                 working_dir: PathBuf::from("project"),
                 project_dir: PathBuf::from(".codexpotter/projects/2026/01/29/18"),
@@ -4399,12 +4399,12 @@ mod tests {
     }
 
     #[test]
-    fn render_only_potter_session_started_emits_user_prompt() {
+    fn render_only_potter_project_started_emits_user_prompt() {
         let (mut proc, mut rx) = make_render_only_processor_without_prompt();
 
         proc.handle_codex_event(Event {
             id: "potter-session-started".into(),
-            msg: EventMsg::PotterSessionStarted {
+            msg: EventMsg::PotterProjectStarted {
                 user_message: Some("test prompt".to_string()),
                 working_dir: PathBuf::from("/workdir"),
                 project_dir: PathBuf::from(".codexpotter/projects/2026/01/29/11"),
@@ -4418,11 +4418,11 @@ mod tests {
         };
 
         let prompt_rendered = prompt.join("\n") + "\n";
-        assert_snapshot!("render_only_potter_session_started", prompt_rendered);
+        assert_snapshot!("render_only_potter_project_started", prompt_rendered);
 
         let hint_rendered = project_hint.join("\n") + "\n";
         assert_snapshot!(
-            "render_only_potter_session_started_project_hint",
+            "render_only_potter_project_started_project_hint",
             hint_rendered
         );
     }

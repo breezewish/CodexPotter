@@ -8,14 +8,14 @@ use codex_protocol::protocol::PotterRoundOutcome;
 use serde::Deserialize;
 use serde::Serialize;
 
-/// Name of the JSONL file that records CodexPotter session/round boundaries.
+/// Name of the JSONL file that records CodexPotter project/round boundaries.
 pub const POTTER_ROLLOUT_FILENAME: &str = "potter-rollout.jsonl";
 
 /// A single append-only JSONL entry in `potter-rollout.jsonl`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PotterRolloutLine {
-    SessionStarted {
+    ProjectStarted {
         user_message: Option<String>,
         user_prompt_file: PathBuf,
     },
@@ -31,7 +31,7 @@ pub enum PotterRolloutLine {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         rollout_base_dir: Option<PathBuf>,
     },
-    SessionSucceeded {
+    ProjectSucceeded {
         rounds: u32,
         duration_secs: u64,
         user_prompt_file: PathBuf,
@@ -132,12 +132,12 @@ mod tests {
 
         append_line(
             &log_path,
-            &PotterRolloutLine::SessionStarted {
+            &PotterRolloutLine::ProjectStarted {
                 user_message: Some("hello".to_string()),
                 user_prompt_file: PathBuf::from(".codexpotter/projects/2026/02/28/1/MAIN.md"),
             },
         )
-        .expect("append session_started");
+        .expect("append project_started");
         append_line(
             &log_path,
             &PotterRolloutLine::RoundStarted {
@@ -151,7 +151,7 @@ mod tests {
         assert_eq!(
             lines,
             vec![
-                PotterRolloutLine::SessionStarted {
+                PotterRolloutLine::ProjectStarted {
                     user_message: Some("hello".to_string()),
                     user_prompt_file: PathBuf::from(".codexpotter/projects/2026/02/28/1/MAIN.md"),
                 },

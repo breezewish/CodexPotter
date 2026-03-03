@@ -32,8 +32,8 @@ At a high level, the "control plane" is in `cli/`, while the "rendering plane" i
      - consumes `EventMsg` notifications and renders them as `HistoryCell`s,
      - allows the user to queue additional prompts (stored inside `CodexPotterTui`).
 5. After each round the CLI checks `finite_incantatem` in the progress file and decides whether to stop
-   the current session (`cli/src/project.rs`).
-6. After the session ends, queued prompts become new sessions (new `.codexpotter/projects/...`
+   the current project (`cli/src/project.rs`).
+6. After the project ends, queued prompts become new projects (new `.codexpotter/projects/...`
    directories) rather than continuing the same conversation context.
 
 ## `cli/` (`codex-potter-cli`) - potter-specific orchestration
@@ -85,8 +85,8 @@ Purpose: shared types used across the runner and renderer:
 Key modules:
 
 - `protocol/src/protocol.rs`: `Op`, `Event`, `EventMsg` and their payload structs.
-  - Includes potter-only event variants such as `EventMsg::PotterSessionStarted` and
-    `EventMsg::PotterRoundStarted`, and `EventMsg::PotterSessionSucceeded` (these are synthesized
+  - Includes potter-only event variants such as `EventMsg::PotterProjectStarted` and
+    `EventMsg::PotterRoundStarted`, and `EventMsg::PotterProjectSucceeded` (these are synthesized
     by `codex-potter-cli`, not sent by the upstream app-server).
 - `protocol/src/user_input.rs`: typed user input items sent to the agent (text, etc.).
 - `protocol/src/plan_tool.rs`: the `update_plan` tool payload type.
@@ -95,7 +95,7 @@ Upstream status:
 
 - Forked from upstream `codex-rs/protocol`, but trimmed down to the subset needed by
   `codex-potter`. When adding new protocol surface area, prefer porting the upstream type(s)
-  instead of inventing new ones (unless it is potter-only like the session/round markers).
+  instead of inventing new ones (unless it is potter-only like the project/round markers).
 
 ## `tui/` (`codex-tui`) - legacy renderer (forked + simplified for potter)
 
@@ -107,7 +107,7 @@ What "potter" uses:
 - A "render-only" runner that consumes `codex-protocol` events and renders them as cells (markdown,
   diffs, exec outputs, etc.).
 - A bottom pane (`BottomPane` / `ChatComposer`) that can queue additional user prompts while a turn
-  is running (those prompts become *new sessions* in `codex-potter-cli`, not shared context).
+  is running (those prompts become *new projects* in `codex-potter-cli`, not shared context).
 
 Key modules:
 

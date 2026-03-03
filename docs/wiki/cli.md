@@ -12,7 +12,7 @@ This is developer-facing documentation. Start at `docs/wiki/README.md` for the w
 
 ## Ownership
 
-- Potter-specific: the `codex-potter` runner lives in `cli/` and owns the multi-round/session
+- Potter-specific: the `codex-potter` runner lives in `cli/` and owns the multi-round/project
   orchestration.
 - Upstream-derived dependency: the spawned `codex app-server` process is part of the upstream Codex
   CLI, and most protocol/event semantics are defined by upstream.
@@ -79,7 +79,7 @@ projects under `<cwd>/.codexpotter/projects`:
 - Search: type to filter (matches user request, git branch, and project path), `Backspace` deletes
 - Sort: `Tab` toggles `Updated` / `Created` (newest first)
 - Confirm: `Enter` resumes the selected project
-- Cancel: `Esc` starts a new session; `Ctrl+C` quits
+- Cancel: `Esc` starts a new project; `Ctrl+C` quits
 
 At the moment the action picker has a single action:
 

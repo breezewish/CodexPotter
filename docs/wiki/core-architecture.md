@@ -30,8 +30,8 @@ Responsibilities:
   - sends a fixed user prompt (`cli/prompts/prompt.md`)
   - injects a developer prompt that points at the progress file (`cli/prompts/developer_prompt.md`)
   - renders until the round finishes (signaled via `EventMsg::PotterRoundFinished`)
-- Collect additional prompts that the user queues during a running turn; after a session ends, each
-  queued prompt becomes a **new session** with a new `.codexpotter/projects/...` directory.
+- Collect additional prompts that the user queues during a running turn; after a project ends, each
+  queued prompt becomes a **new project** with a new `.codexpotter/projects/...` directory.
 
 ### External `codex app-server` process (upstream Codex CLI)
 
@@ -59,14 +59,14 @@ Key types:
 
 Potter-specific additions:
 
-- `EventMsg::PotterSessionStarted`
+- `EventMsg::PotterProjectStarted`
 - `EventMsg::PotterRoundStarted`
 - `EventMsg::PotterRoundFinished`
-- `EventMsg::PotterSessionSucceeded`
+- `EventMsg::PotterProjectSucceeded`
 
 These markers are synthesized by the control plane (`cli/src/main.rs` and
 `cli/src/app_server_backend.rs`, not emitted by the upstream app-server) so the TUI can render
-session/round boundaries and successful session completion as normal history cells.
+project/round boundaries and successful project completion as normal history cells.
 
 ### TUI renderer (crate: `codex-tui`)
 
@@ -97,17 +97,17 @@ Key modules:
 
 Everything under `.codexpotter/` is intended to be gitignored.
 
-## Session + round model
+## Project + round model
 
 Terminology used by `codex-potter`:
 
-- **Session**: one user goal (one progress file). Created once per user prompt.
-- **Round**: one `codex app-server` process invocation. A session runs up to `--rounds` rounds.
+- **Project**: one user goal (one progress file). Created once per user prompt.
+- **Round**: one `codex app-server` process invocation. A project runs up to `--rounds` rounds.
 - **Turn**: in upstream app-server terms, one `turn/start` call. `codex-potter` typically runs one
   turn per round; on retryable stream/network errors it may issue a follow-up `continue` (another
   `turn/start`) within the same round.
 
-Important implication: a multi-round session does *not* keep a Codex conversation thread alive.
+Important implication: a multi-round project does *not* keep a Codex conversation thread alive.
 Durable memory is the progress file and the repository state on disk.
 
 ## End-to-end flow
@@ -122,9 +122,9 @@ Durable memory is the progress file and the repository state on disk.
 4. Optionally show a global gitignore recommendation prompt.
 5. Prompt the user for the initial goal (`CodexPotterTui::prompt_user(...)`).
 
-### 2) Session initialization
+### 2) Project initialization
 
-For each session goal:
+For each project goal:
 
 1. Create `.codexpotter/projects/YYYY/MM/DD/N/MAIN.md` from `cli/prompts/project_main.md`.
 2. Ensure the gitignored knowledge base directory exists.
@@ -135,9 +135,9 @@ For each session goal:
 For each round:
 
 1. CLI sends potter-only marker events to the UI stream:
-   - `PotterSessionStarted` (only for the first round of a session)
+   - `PotterProjectStarted` (only for the first round of a project)
    - `PotterRoundStarted` (for every round)
-   - `PotterSessionSucceeded` (only when the session finishes successfully, i.e. `finite_incantatem: true`)
+   - `PotterProjectSucceeded` (only when the project finishes successfully, i.e. `finite_incantatem: true`)
 2. CLI spawns `codex app-server` and starts the JSON-RPC bridge task
    (`cli/src/app_server_backend.rs`).
 3. Backend performs:
@@ -153,19 +153,19 @@ For each round:
    into `HistoryCell`s and renders them.
 6. When the control plane emits `EventMsg::PotterRoundFinished`, the UI exits the render-only
    runner. The CLI checks the progress file front matter for `finite_incantatem: true` and decides
-   whether to stop the session early (`cli/src/project.rs`).
+   whether to stop the project early (`cli/src/project.rs`).
 
 ### 4) Queued prompts during a turn
 
 While a turn is running, the bottom composer can queue additional prompts. These are stored by
 `CodexPotterTui` and surfaced to the CLI via `CodexPotterTui::pop_queued_user_prompt()`.
 
-Each queued prompt becomes a new session (a new progress file) after the current session finishes.
+Each queued prompt becomes a new project (a new progress file) after the current project finishes.
 The prompts intentionally do **not** share a conversation context.
 
 ## Ownership notes
 
-- The multi-round/session model and progress file conventions are potter-specific (`cli/` +
+- The multi-round/project model and progress file conventions are potter-specific (`cli/` +
   `tui/src/potter_tui.rs`).
 - The rendering pipeline is upstream-derived (`tui/`), but simplified to only the parts needed for
   prompt + render-only operation.

@@ -203,7 +203,7 @@ async fn main() -> anyhow::Result<()> {
 
     let mut pending_user_prompts = prompt_queue::PromptQueue::new(user_prompt);
 
-    'session: loop {
+    'project: loop {
         let next_prompt = pending_user_prompts.pop_next_prompt(|| ui.pop_queued_user_prompt());
         let Some(next_prompt) = prompt_queue::next_prompt_or_prompt_user(next_prompt, || {
             ui.prompt_user(codex_tui::PromptFooterContext::new(
@@ -213,7 +213,7 @@ async fn main() -> anyhow::Result<()> {
         })
         .await?
         else {
-            break 'session;
+            break 'project;
         };
 
         let user_prompt = match next_prompt {
@@ -256,8 +256,8 @@ async fn main() -> anyhow::Result<()> {
         for round_index in 0..cli.rounds.get() {
             let total_rounds = u32::try_from(cli.rounds.get()).unwrap_or(u32::MAX);
             let current_round = u32::try_from(round_index.saturating_add(1)).unwrap_or(u32::MAX);
-            let session_started = if round_index == 0 {
-                Some(crate::round_runner::PotterSessionStartedInfo {
+            let project_started = if round_index == 0 {
+                Some(crate::round_runner::PotterProjectStartedInfo {
                     user_message: Some(user_prompt.clone()),
                     working_dir: workdir.clone(),
                     project_dir: project_dir.clone(),
@@ -272,10 +272,10 @@ async fn main() -> anyhow::Result<()> {
                 &round_context,
                 crate::round_runner::PotterRoundOptions {
                     pad_before_first_cell: round_index != 0,
-                    session_started,
+                    project_started,
                     round_current: current_round,
                     round_total: total_rounds,
-                    session_succeeded_rounds: current_round,
+                    project_succeeded_rounds: current_round,
                 },
             )
             .await?;
@@ -286,7 +286,7 @@ async fn main() -> anyhow::Result<()> {
                         derive_resume_project_path_from_project_dir(&project_dir)
                             .unwrap_or_else(|| project_dir.to_string_lossy().to_string()),
                     );
-                    break 'session;
+                    break 'project;
                 }
                 ExitReason::TaskFailed(_) => break,
                 ExitReason::Fatal(_) => {

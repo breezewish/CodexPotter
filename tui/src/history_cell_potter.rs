@@ -3,7 +3,7 @@
 //! # Divergences from upstream Codex TUI
 //!
 //! Upstream Codex does not render these cells. They are used to surface CodexPotter-specific
-//! runner behavior, such as project hints, stream recovery retries, and the final "session
+//! runner behavior, such as project hints, stream recovery retries, and the final "project
 //! succeeded" summary.
 //!
 //! See `tui/AGENTS.md` ("Additional CodexPotter items" and "auto retry on stream/network errors").
@@ -35,15 +35,15 @@ pub fn new_potter_project_hint(user_prompt_file: PathBuf) -> PrefixedWrappedHist
     PrefixedWrappedHistoryCell::new(text, "  ↳ ".dim(), "    ")
 }
 
-/// Render the final multi-round summary block shown on success.
-pub fn new_potter_session_succeeded(
+/// Render the final multi-round summary block shown when a project succeeds.
+pub fn new_potter_project_succeeded(
     rounds: u32,
     duration: Duration,
     user_prompt_file: PathBuf,
     git_commit_start: String,
     git_commit_end: String,
-) -> PotterSessionSucceededCell {
-    PotterSessionSucceededCell {
+) -> PotterProjectSucceededCell {
+    PotterProjectSucceededCell {
         rounds,
         duration,
         user_prompt_file,
@@ -53,8 +53,8 @@ pub fn new_potter_session_succeeded(
 }
 
 #[derive(Debug)]
-/// History cell rendered at the end of a successful CodexPotter session.
-pub struct PotterSessionSucceededCell {
+/// History cell rendered at the end of a successful CodexPotter project.
+pub struct PotterProjectSucceededCell {
     rounds: u32,
     duration: Duration,
     user_prompt_file: PathBuf,
@@ -62,7 +62,7 @@ pub struct PotterSessionSucceededCell {
     git_commit_end: String,
 }
 
-impl HistoryCell for PotterSessionSucceededCell {
+impl HistoryCell for PotterProjectSucceededCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let elapsed = crate::status_indicator_widget::fmt_elapsed_compact(self.duration.as_secs());
         let rounds = self.rounds;
@@ -74,7 +74,7 @@ impl HistoryCell for PotterSessionSucceededCell {
         let resume_command = format!("codex-potter resume {resume_project_path}");
 
         let mut lines: Vec<Line<'static>> = vec![
-            potter_session_succeeded_separator(width),
+            potter_project_succeeded_separator(width),
             Line::from(""),
             Line::from(vec![
                 "  ".into(),
@@ -112,7 +112,7 @@ impl HistoryCell for PotterSessionSucceededCell {
     }
 }
 
-fn potter_session_succeeded_separator(width: u16) -> Line<'static> {
+fn potter_project_succeeded_separator(width: u16) -> Line<'static> {
     let style = Style::default().fg(secondary_color());
     Line::from("─".repeat(width as usize)).style(style)
 }

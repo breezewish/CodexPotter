@@ -5,7 +5,7 @@ expression: terminal.backend().vt100().screen().contents()
 
   Add .codexpotter/ to your global gitignore file ~/.config/git/ignore?
 
-  This keeps your CodexPotter sessions private and prevents accidental commits. 
+  This keeps your CodexPotter projects private and prevents accidental commits. 
 
   › 1. Yes, add to global gitignore
     2. No

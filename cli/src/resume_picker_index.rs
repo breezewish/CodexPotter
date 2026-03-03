@@ -90,7 +90,7 @@ fn row_for_progress_file(
     let user_request = match short_title {
         Some(title) => title,
         None => index
-            .session_started
+            .project_started
             .user_message
             .clone()
             .unwrap_or_default(),
@@ -243,12 +243,12 @@ git_branch: "{git_branch}"
 
         crate::potter_rollout::append_line(
             &potter_rollout_path,
-            &crate::potter_rollout::PotterRolloutLine::SessionStarted {
+            &crate::potter_rollout::PotterRolloutLine::ProjectStarted {
                 user_message: user_message.map(ToOwned::to_owned),
                 user_prompt_file: main_rel,
             },
         )
-        .expect("append session_started");
+        .expect("append project_started");
         crate::potter_rollout::append_line(
             &potter_rollout_path,
             &crate::potter_rollout::PotterRolloutLine::RoundStarted {
@@ -381,12 +381,12 @@ git_branch: "{git_branch}"
                 .expect("thread id");
         crate::potter_rollout::append_line(
             &potter_rollout_path,
-            &crate::potter_rollout::PotterRolloutLine::SessionStarted {
+            &crate::potter_rollout::PotterRolloutLine::ProjectStarted {
                 user_message: Some("hello".to_string()),
                 user_prompt_file: main_rel,
             },
         )
-        .expect("append session_started");
+        .expect("append project_started");
         crate::potter_rollout::append_line(
             &potter_rollout_path,
             &crate::potter_rollout::PotterRolloutLine::RoundStarted {

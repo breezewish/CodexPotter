@@ -118,15 +118,15 @@ pub enum EventMsg {
     /// Ack the client's configure message.
     SessionConfigured(SessionConfiguredEvent),
 
-    /// `codex-potter` session started (outside of the app-server protocol).
-    PotterSessionStarted {
-        /// Optional user prompt that starts the session.
+    /// `codex-potter` project started (outside of the app-server protocol).
+    PotterProjectStarted {
+        /// Optional user prompt that starts the project.
         user_message: Option<String>,
         /// Working directory where `codex-potter` was launched.
         working_dir: PathBuf,
         /// Project directory containing CodexPotter progress files.
         project_dir: PathBuf,
-        /// User prompt file for this CodexPotter session (e.g. `.codexpotter/projects/.../MAIN.md`).
+        /// User prompt file for this CodexPotter project (e.g. `.codexpotter/projects/.../MAIN.md`).
         user_prompt_file: PathBuf,
     },
 
@@ -177,13 +177,13 @@ pub enum EventMsg {
         max_attempts: u32,
     },
 
-    /// `codex-potter` session finished successfully (outside of the app-server protocol).
-    PotterSessionSucceeded {
+    /// `codex-potter` project finished successfully (outside of the app-server protocol).
+    PotterProjectSucceeded {
         /// Total number of rounds rendered for this CodexPotter project.
         rounds: u32,
         /// Total wall time spent across all rounds.
         duration: Duration,
-        /// User prompt file for this CodexPotter session (e.g. `.codexpotter/projects/.../MAIN.md`).
+        /// User prompt file for this CodexPotter project (e.g. `.codexpotter/projects/.../MAIN.md`).
         user_prompt_file: PathBuf,
         /// Git commit before CodexPotter started mutating the workspace (empty when unavailable).
         git_commit_start: String,

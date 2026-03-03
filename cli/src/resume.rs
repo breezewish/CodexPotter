@@ -396,6 +396,7 @@ where
         codex_bin,
         developer_prompt,
         backend_launch,
+        backend_event_mode: crate::app_server_backend::AppServerEventMode::Interactive,
         codex_compat_home,
         thread_cwd: Some(resolved.workdir.clone()),
         turn_prompt,

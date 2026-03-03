@@ -1,4 +1,6 @@
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::time::Instant;
 
 use anyhow::Context;
@@ -9,11 +11,41 @@ use codex_protocol::protocol::PotterRoundOutcome;
 use codex_tui::ExitReason;
 use tokio::sync::mpsc::unbounded_channel;
 
+/// Boxed future returned by [`PotterRoundUi`] implementations.
+pub type UiFuture<'a, T> = Pin<Box<dyn Future<Output = anyhow::Result<T>> + 'a>>;
+
+/// Abstraction over the round renderer/driver.
+///
+/// This exists so CodexPotter can reuse the same round orchestration logic for both interactive
+/// TUI rendering and non-interactive headless runners (for example `exec --json`).
+pub trait PotterRoundUi {
+    fn set_project_started_at(&mut self, started_at: Instant);
+
+    fn render_round<'a>(
+        &'a mut self,
+        params: codex_tui::RenderRoundParams,
+    ) -> UiFuture<'a, codex_tui::AppExitInfo>;
+}
+
+impl PotterRoundUi for codex_tui::CodexPotterTui {
+    fn set_project_started_at(&mut self, started_at: Instant) {
+        codex_tui::CodexPotterTui::set_project_started_at(self, started_at);
+    }
+
+    fn render_round<'a>(
+        &'a mut self,
+        params: codex_tui::RenderRoundParams,
+    ) -> UiFuture<'a, codex_tui::AppExitInfo> {
+        Box::pin(codex_tui::CodexPotterTui::render_round(self, params))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PotterRoundContext {
     pub codex_bin: String,
     pub developer_prompt: String,
     pub backend_launch: crate::app_server_backend::AppServerLaunchConfig,
+    pub backend_event_mode: crate::app_server_backend::AppServerEventMode,
     pub codex_compat_home: Option<PathBuf>,
     pub thread_cwd: Option<PathBuf>,
     pub turn_prompt: String,
@@ -62,7 +94,7 @@ pub struct PotterRoundResult {
 }
 
 pub async fn run_potter_round(
-    ui: &mut codex_tui::CodexPotterTui,
+    ui: &mut impl PotterRoundUi,
     context: &PotterRoundContext,
     options: PotterRoundOptions,
 ) -> anyhow::Result<PotterRoundResult> {
@@ -98,7 +130,7 @@ pub async fn run_potter_round(
 /// This is primarily used by `codex-potter resume` when the last recorded round has no
 /// `PotterRoundFinished` marker yet.
 pub async fn continue_potter_round(
-    ui: &mut codex_tui::CodexPotterTui,
+    ui: &mut impl PotterRoundUi,
     context: &PotterRoundContext,
     options: PotterContinueRoundOptions,
 ) -> anyhow::Result<PotterRoundResult> {
@@ -144,7 +176,7 @@ struct PotterRoundInnerOptions {
 }
 
 async fn run_potter_round_inner(
-    ui: &mut codex_tui::CodexPotterTui,
+    ui: &mut impl PotterRoundUi,
     context: &PotterRoundContext,
     options: PotterRoundInnerOptions,
 ) -> anyhow::Result<PotterRoundResult> {
@@ -319,7 +351,7 @@ async fn run_potter_round_inner(
             codex_home: context.codex_compat_home.clone(),
             thread_cwd: context.thread_cwd.clone(),
             resume_thread_id,
-            event_mode: crate::app_server_backend::AppServerEventMode::Interactive,
+            event_mode: context.backend_event_mode,
         },
         op_rx,
         backend_event_tx,

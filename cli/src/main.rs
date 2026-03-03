@@ -4,6 +4,7 @@ mod atomic_write;
 mod codex_compat;
 mod config;
 mod exec_jsonl;
+mod exec_json_round_ui;
 mod global_gitignore;
 mod path_utils;
 mod potter_rollout;
@@ -243,6 +244,7 @@ async fn main() -> anyhow::Result<()> {
             codex_bin: codex_bin.clone(),
             developer_prompt: developer_prompt.clone(),
             backend_launch,
+            backend_event_mode: crate::app_server_backend::AppServerEventMode::Interactive,
             codex_compat_home: codex_compat_home.clone(),
             thread_cwd: Some(workdir.clone()),
             turn_prompt: turn_prompt.clone(),

@@ -3,6 +3,7 @@ mod app_server_protocol;
 mod atomic_write;
 mod codex_compat;
 mod config;
+mod exec_jsonl;
 mod global_gitignore;
 mod path_utils;
 mod potter_rollout;

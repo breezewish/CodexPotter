@@ -286,6 +286,7 @@ where
             .render_round(codex_tui::RenderRoundParams {
                 prompt: String::new(),
                 pad_before_first_cell: idx != 0,
+                status_header_prefix: None,
                 prompt_footer: prompt_footer.clone(),
                 codex_op_tx: op_tx.clone(),
                 codex_event_rx: event_rx,
@@ -327,6 +328,7 @@ where
             .render_round(codex_tui::RenderRoundParams {
                 prompt: String::new(),
                 pad_before_first_cell: has_completed_rounds,
+                status_header_prefix: None,
                 prompt_footer: prompt_footer.clone(),
                 codex_op_tx: op_tx.clone(),
                 codex_event_rx: event_rx,

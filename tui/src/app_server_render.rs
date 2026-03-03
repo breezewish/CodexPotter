@@ -255,6 +255,13 @@ pub struct RoundRenderOptions {
     /// When true, renders the user prompt into the transcript before sending it to the backend.
     pub render_user_prompt: bool,
 
+    /// Optional status header prefix shown while a task is running (e.g. `Round 2/10`).
+    ///
+    /// This is primarily used by `codex-potter` to keep the working banner consistent when
+    /// continuing an unfinished round (where `EventMsg::PotterRoundStarted` may be suppressed to
+    /// avoid inserting a duplicate transcript marker).
+    pub status_header_prefix: Option<String>,
+
     /// When true, inserts a blank line before the first emitted history cell in this round.
     ///
     /// This is useful when multiple rounds are rendered into the same terminal transcript while
@@ -266,6 +273,7 @@ impl Default for RoundRenderOptions {
     fn default() -> Self {
         Self {
             render_user_prompt: true,
+            status_header_prefix: None,
             pad_before_first_cell: false,
         }
     }
@@ -355,6 +363,7 @@ pub async fn run_round_with_tui_options_and_queue(
     let mut bottom_pane = new_default_bottom_pane(tui, app_event_tx.clone(), true);
     bottom_pane.set_prompt_footer_context(prompt_footer);
     bottom_pane.set_project_started_at(Some(project_started_at));
+    bottom_pane.set_status_header_prefix(options.status_header_prefix.clone());
     if let Some(draft) = state.composer_draft.take() {
         bottom_pane.composer_mut().restore_draft(draft);
     }
@@ -535,10 +544,13 @@ impl AppServerEventProcessor {
                     crate::history_cell_potter::new_potter_project_hint(user_prompt_file),
                 )));
             }
-            EventMsg::PotterRoundStarted { .. } => {
+            EventMsg::PotterRoundStarted { current, total } => {
                 self.flush_pending_exploring_cell();
                 self.flush_pending_success_ran_cell();
                 self.needs_final_message_separator = true;
+                self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                    crate::history_cell_potter::new_potter_round_started(current, total),
+                )));
             }
             EventMsg::PotterProjectSucceeded {
                 rounds,
@@ -3028,7 +3040,8 @@ mod tests {
         let transient_height = u16::try_from(transient_lines.len()).unwrap_or(u16::MAX);
         let viewport_height = pane_height.saturating_add(transient_height);
 
-        let history_lines = vec![Line::from("• Transcript line")];
+        let history_lines =
+            crate::history_cell_potter::new_potter_round_started(1, 10).display_lines(width);
         let history_height = u16::try_from(history_lines.len()).unwrap_or(u16::MAX);
         let height = history_height.saturating_add(viewport_height).max(1);
 
@@ -3124,7 +3137,8 @@ mod tests {
         let transient_height = u16::try_from(transient_lines.len()).unwrap_or(u16::MAX);
         let viewport_height = pane_height.saturating_add(transient_height);
 
-        let history_lines = vec![Line::from("• Transcript line")];
+        let history_lines =
+            crate::history_cell_potter::new_potter_round_started(1, 10).display_lines(width);
         let history_height = u16::try_from(history_lines.len()).unwrap_or(u16::MAX);
         let height = history_height.saturating_add(viewport_height).max(1);
 
@@ -4424,7 +4438,7 @@ mod tests {
     }
 
     #[test]
-    fn round_renderer_potter_round_started_does_not_emit_transcript_cells() {
+    fn round_renderer_potter_round_started_emits_iteration_marker() {
         let (mut proc, mut rx) = make_round_renderer_processor_without_prompt();
 
         proc.handle_codex_event(Event {
@@ -4436,10 +4450,11 @@ mod tests {
         });
 
         let events = drain_history_cell_strings(&mut rx, u16::MAX);
-        assert!(
-            events.is_empty(),
-            "expected PotterRoundStarted to not emit transcript cells, got: {events:?}"
-        );
+        let [marker] = events.as_slice() else {
+            panic!("expected exactly one marker cell; got: {events:?}");
+        };
+        let rendered = marker.join("\n") + "\n";
+        assert_snapshot!("round_renderer_potter_round_started", rendered);
     }
 
     #[test]

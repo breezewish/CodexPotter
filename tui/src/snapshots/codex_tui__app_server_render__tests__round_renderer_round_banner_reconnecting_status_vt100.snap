@@ -2,7 +2,7 @@
 source: tui/src/app_server_render.rs
 expression: terminal.backend().vt100().screen().contents()
 ---
-• Transcript line
+• CodexPotter: iteration round 1/10
 
 • CodexPotter: retry 3/10
   └ Stream disconnected before completion: error sending request for url

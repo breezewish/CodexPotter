@@ -15,6 +15,8 @@ use crate::tui::Tui;
 pub struct RenderRoundParams {
     pub prompt: String,
     pub pad_before_first_cell: bool,
+    /// Optional status header prefix shown while a task is running (e.g. `Round 2/10`).
+    pub status_header_prefix: Option<String>,
     pub prompt_footer: PromptFooterContext,
     pub codex_op_tx: UnboundedSender<Op>,
     pub codex_event_rx: UnboundedReceiver<Event>,
@@ -199,6 +201,7 @@ impl CodexPotterTui {
         let RenderRoundParams {
             prompt,
             pad_before_first_cell,
+            status_header_prefix,
             prompt_footer,
             codex_op_tx,
             codex_event_rx,
@@ -213,6 +216,7 @@ impl CodexPotterTui {
         let options = crate::app_server_render::RoundRenderOptions {
             render_user_prompt: false,
             pad_before_first_cell: pad_before_first_cell || self.has_rendered_round,
+            status_header_prefix,
         };
         let mut queued = std::mem::take(&mut self.queued_user_prompts);
         let mut composer_draft = self.composer_draft.take();

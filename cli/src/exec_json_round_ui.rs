@@ -301,6 +301,7 @@ mod tests {
             .render_round(codex_tui::RenderRoundParams {
                 prompt: "Continue working according to the WORKFLOW_INSTRUCTIONS".to_string(),
                 pad_before_first_cell: false,
+                status_header_prefix: None,
                 prompt_footer: codex_tui::PromptFooterContext::new(PathBuf::from("."), None),
                 codex_op_tx,
                 codex_event_rx,
@@ -394,6 +395,7 @@ mod tests {
             .render_round(codex_tui::RenderRoundParams {
                 prompt: "Continue working according to the WORKFLOW_INSTRUCTIONS".to_string(),
                 pad_before_first_cell: false,
+                status_header_prefix: None,
                 prompt_footer: codex_tui::PromptFooterContext::new(PathBuf::from("."), None),
                 codex_op_tx,
                 codex_event_rx,

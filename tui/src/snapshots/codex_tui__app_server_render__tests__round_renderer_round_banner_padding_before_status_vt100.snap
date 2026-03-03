@@ -2,7 +2,7 @@
 source: tui/src/app_server_render.rs
 expression: terminal.backend().vt100().screen().contents()
 ---
-• Transcript line
+• CodexPotter: iteration round 1/10
 
 • Round 1/10 (0s) · Working (0s) · 100% context left
 

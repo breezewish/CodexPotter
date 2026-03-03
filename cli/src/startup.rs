@@ -1,3 +1,4 @@
+use std::fmt;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -8,6 +9,24 @@ pub enum CodexBinError {
     NotFoundInPath { command: String },
     InvalidPath { path: PathBuf, reason: String },
 }
+
+impl fmt::Display for CodexBinError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CodexBinError::NotFoundInPath { command } => write!(
+                f,
+                "Failed to find `{command}` binary. codex-potter requires codex CLI installed locally. See https://developers.openai.com/codex/quickstart?setup=cli"
+            ),
+            CodexBinError::InvalidPath { path, reason } => write!(
+                f,
+                "Failed to find codex binary specified by `--codex-bin`: {} ({reason}).",
+                path.display()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for CodexBinError {}
 
 impl CodexBinError {
     pub fn render_ansi(&self) -> String {
@@ -163,6 +182,38 @@ mod tests {
 
         assert!(!rendered.contains("quickstart?setup=cli"));
         insta::assert_snapshot!(ansi_to_vt100_contents(&rendered));
+    }
+
+    #[test]
+    fn display_not_found_error_is_plain_text() {
+        let err = CodexBinError::NotFoundInPath {
+            command: "codex".to_string(),
+        };
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("Failed to find `codex` binary"));
+        assert!(rendered.contains("quickstart?setup=cli"));
+        assert!(
+            !rendered.contains("\u{1b}"),
+            "should not include ANSI sequences"
+        );
+    }
+
+    #[test]
+    fn display_invalid_path_includes_reason() {
+        let err = CodexBinError::InvalidPath {
+            path: PathBuf::from("/nope/codex"),
+            reason: "does not exist".to_string(),
+        };
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("--codex-bin"));
+        assert!(rendered.contains("/nope/codex"));
+        assert!(rendered.contains("does not exist"));
+        assert!(
+            !rendered.contains("\u{1b}"),
+            "should not include ANSI sequences"
+        );
     }
 
     #[test]

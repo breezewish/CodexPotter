@@ -18,6 +18,7 @@ mod resume_picker_index;
 mod round_runner;
 mod startup;
 
+use std::io::Write as _;
 use std::num::NonZeroUsize;
 use std::path::Path;
 use std::path::PathBuf;
@@ -117,9 +118,72 @@ fn parse_cli() -> Cli {
     Cli::from_arg_matches(&matches).unwrap_or_else(|err| err.exit())
 }
 
+fn write_exec_json_preflight_error(message: &str) {
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    let event = crate::exec_jsonl::ExecJsonlEvent::Error(crate::exec_jsonl::ThreadErrorEvent {
+        message: message.to_string(),
+    });
+
+    if serde_json::to_writer(&mut out, &event).is_ok() && out.write_all(b"\n").is_ok() {
+        let _ = out.flush();
+    }
+}
+
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> anyhow::Result<()> {
     let cli = parse_cli();
+
+    if let Some(CliCommand::Exec { prompt, json }) = cli.command.as_ref() {
+        if !json {
+            eprintln!("error: currently only --json output is supported for exec");
+            std::process::exit(1);
+        }
+
+        let workdir = match std::env::current_dir() {
+            Ok(workdir) => workdir,
+            Err(err) => {
+                let message = format!("resolve current directory: {err}");
+                eprintln!("error: {message}");
+                write_exec_json_preflight_error(&message);
+                std::process::exit(1);
+            }
+        };
+
+        let codex_bin = match startup::resolve_codex_bin(&cli.codex_bin) {
+            Ok(resolved) => resolved.command_for_spawn,
+            Err(err) => {
+                eprint!("{}", err.render_ansi());
+                write_exec_json_preflight_error(&err.to_string());
+                std::process::exit(1);
+            }
+        };
+
+        let backend_launch = app_server_backend::AppServerLaunchConfig::from_cli(
+            cli.sandbox,
+            cli.dangerously_bypass_approvals_and_sandbox,
+        );
+
+        let codex_compat_home = match crate::codex_compat::ensure_default_codex_compat_home() {
+            Ok(home) => home,
+            Err(err) => {
+                eprintln!("warning: failed to configure codex-compat home: {err}");
+                None
+            }
+        };
+
+        let exit_code = crate::exec::run_exec_json(
+            &workdir,
+            prompt.clone(),
+            cli.rounds,
+            codex_bin,
+            backend_launch,
+            codex_compat_home,
+        )
+        .await;
+        std::process::exit(exit_code);
+    }
+
     let bypass = cli.dangerously_bypass_approvals_and_sandbox;
     let sandbox = cli.sandbox;
     let mut resume_note_project_path: Option<String> = None;
@@ -148,24 +212,6 @@ async fn main() -> anyhow::Result<()> {
             None
         }
     };
-
-    if let Some(CliCommand::Exec { prompt, json }) = cli.command.as_ref() {
-        if !json {
-            eprintln!("error: currently only --json output is supported for exec");
-            std::process::exit(1);
-        }
-
-        let exit_code = crate::exec::run_exec_json(
-            &workdir,
-            prompt.clone(),
-            cli.rounds,
-            codex_bin.clone(),
-            backend_launch,
-            codex_compat_home.clone(),
-        )
-        .await;
-        std::process::exit(exit_code);
-    }
 
     let mut ui = codex_tui::CodexPotterTui::new()?;
 

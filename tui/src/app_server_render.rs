@@ -180,26 +180,14 @@ pub async fn prompt_user_with_tui(
         }
     }
 
-    let (codex_op_tx, _codex_op_rx) = unbounded_channel::<Op>();
-    let (_unused_event_tx, mut unused_event_rx) = unbounded_channel::<Event>();
-    let (_unused_fatal_tx, mut unused_fatal_rx) = unbounded_channel::<String>();
-
     let mut app = RenderAppState::new_prompt_screen(
         app_event_tx,
-        codex_op_tx,
         bottom_pane,
         prompt_history,
         file_search,
         should_pad_prompt_viewport,
     );
-    let _ = app
-        .run(
-            tui,
-            &mut app_event_rx,
-            &mut unused_event_rx,
-            &mut unused_fatal_rx,
-        )
-        .await?;
+    let _ = app.run(tui, &mut app_event_rx, None, None).await?;
 
     Ok(match app.prompt_action.take() {
         Some(PromptScreenAction::Submitted(text)) => Some(text),
@@ -377,7 +365,7 @@ pub async fn run_render_only_with_tui_options_and_queue(
     let mut app = RenderAppState::new(
         driver,
         app_event_tx.clone(),
-        codex_op_tx,
+        Some(codex_op_tx),
         bottom_pane,
         prompt_history,
         file_search,
@@ -390,8 +378,8 @@ pub async fn run_render_only_with_tui_options_and_queue(
         .run(
             tui,
             &mut app_event_rx,
-            &mut codex_event_rx,
-            &mut fatal_exit_rx,
+            Some(&mut codex_event_rx),
+            Some(&mut fatal_exit_rx),
         )
         .await;
     *state.queued_user_messages = app.queued_user_messages;
@@ -929,12 +917,6 @@ impl ReasoningStatusTracker {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RenderAppSessionKind {
-    PromptScreen,
-    RenderOnlyTurn,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum PromptScreenAction {
     Submitted(String),
@@ -942,12 +924,11 @@ enum PromptScreenAction {
 }
 
 struct RenderAppState {
-    session_kind: RenderAppSessionKind,
     prompt_action: Option<PromptScreenAction>,
     should_pad_prompt_viewport: bool,
     processor: RenderOnlyProcessor,
     app_event_tx: AppEventSender,
-    codex_op_tx: UnboundedSender<Op>,
+    codex_op_tx: Option<UnboundedSender<Op>>,
     bottom_pane: BottomPane,
     prompt_history: crate::prompt_history_store::PromptHistoryStore,
     file_search: FileSearchManager,
@@ -965,14 +946,13 @@ impl RenderAppState {
     fn new(
         processor: RenderOnlyProcessor,
         app_event_tx: AppEventSender,
-        codex_op_tx: UnboundedSender<Op>,
+        codex_op_tx: Option<UnboundedSender<Op>>,
         bottom_pane: BottomPane,
         prompt_history: crate::prompt_history_store::PromptHistoryStore,
         file_search: FileSearchManager,
         queued_user_messages: VecDeque<String>,
     ) -> Self {
         Self {
-            session_kind: RenderAppSessionKind::RenderOnlyTurn,
             prompt_action: None,
             should_pad_prompt_viewport: false,
             processor,
@@ -994,7 +974,6 @@ impl RenderAppState {
 
     fn new_prompt_screen(
         app_event_tx: AppEventSender,
-        codex_op_tx: UnboundedSender<Op>,
         bottom_pane: BottomPane,
         prompt_history: crate::prompt_history_store::PromptHistoryStore,
         file_search: FileSearchManager,
@@ -1004,19 +983,18 @@ impl RenderAppState {
         let mut app = Self::new(
             processor,
             app_event_tx,
-            codex_op_tx,
+            None,
             bottom_pane,
             prompt_history,
             file_search,
             VecDeque::new(),
         );
-        app.session_kind = RenderAppSessionKind::PromptScreen;
         app.should_pad_prompt_viewport = should_pad_prompt_viewport;
         app
     }
 
     fn build_transient_lines(&self, width: u16) -> Vec<Line<'static>> {
-        if matches!(self.session_kind, RenderAppSessionKind::PromptScreen) {
+        if self.codex_op_tx.is_none() {
             return if self.should_pad_prompt_viewport {
                 vec![Line::from("")]
             } else {
@@ -1063,15 +1041,21 @@ impl RenderAppState {
         &mut self,
         tui: &mut Tui,
         app_event_rx: &mut UnboundedReceiver<AppEvent>,
-        codex_event_rx: &mut UnboundedReceiver<Event>,
-        fatal_exit_rx: &mut UnboundedReceiver<String>,
+        codex_event_rx: Option<&mut UnboundedReceiver<Event>>,
+        fatal_exit_rx: Option<&mut UnboundedReceiver<String>>,
     ) -> anyhow::Result<AppExitInfo> {
+        let has_backend = self.codex_op_tx.is_some();
+        anyhow::ensure!(
+            has_backend == codex_event_rx.is_some() && has_backend == fatal_exit_rx.is_some(),
+            "internal error: backend channels must be either all present or all absent",
+        );
+
         let mut tui_events = tui.event_stream();
-        self.bottom_pane.set_task_running(matches!(
-            self.session_kind,
-            RenderAppSessionKind::RenderOnlyTurn
-        ));
+        self.bottom_pane.set_task_running(has_backend);
         tui.frame_requester().schedule_frame();
+
+        let mut codex_event_rx = codex_event_rx;
+        let mut fatal_exit_rx = fatal_exit_rx;
 
         loop {
             tokio::select! {
@@ -1100,11 +1084,18 @@ impl RenderAppState {
                             while let Ok(app_event) = app_event_rx.try_recv() {
                                 self.handle_app_event(tui, app_event)?;
                             }
-                            while let Ok(event) = codex_event_rx.try_recv() {
-                                self.handle_app_event(tui, AppEvent::CodexEvent(event))?;
+                            if let Some(rx) = codex_event_rx.as_mut() {
+                                while let Ok(event) = rx.try_recv() {
+                                    self.handle_app_event(tui, AppEvent::CodexEvent(event))?;
+                                }
                             }
-                            while let Ok(message) = fatal_exit_rx.try_recv() {
-                                self.handle_app_event(tui, AppEvent::FatalExitRequest(message))?;
+                            if let Some(rx) = fatal_exit_rx.as_mut() {
+                                while let Ok(message) = rx.try_recv() {
+                                    self.handle_app_event(
+                                        tui,
+                                        AppEvent::FatalExitRequest(message),
+                                    )?;
+                                }
                             }
 
                             // Drain any new app events produced by the codex events we just
@@ -1126,9 +1117,7 @@ impl RenderAppState {
                                 }
                                 let width = tui.terminal.last_known_screen_size.width.max(1);
                                 self.handle_key_event(key_event, tui.frame_requester(), width);
-                                if matches!(self.session_kind, RenderAppSessionKind::PromptScreen)
-                                    && self.prompt_action.is_some()
-                                {
+                                if self.prompt_action.is_some() {
                                     if matches!(
                                         self.prompt_action,
                                         Some(PromptScreenAction::CancelledByUser)
@@ -1155,23 +1144,34 @@ impl RenderAppState {
                     };
                     self.handle_app_event(tui, app_event)?;
                 }
-                maybe_codex_event = codex_event_rx.recv() => {
+                maybe_codex_event = async {
+                    if let Some(rx) = codex_event_rx.as_mut() {
+                        rx.recv().await
+                    } else {
+                        None
+                    }
+                }, if has_backend => {
                     match maybe_codex_event {
                         Some(event) => {
                             self.handle_app_event(tui, AppEvent::CodexEvent(event))?;
                         }
                         None => {
-                            if matches!(self.session_kind, RenderAppSessionKind::RenderOnlyTurn)
-                                && !self.exit_after_next_draw
-                            {
-                                self.exit_reason = ExitReason::Fatal("Backend disconnected".to_string());
+                            if !self.exit_after_next_draw {
+                                self.exit_reason =
+                                    ExitReason::Fatal("Backend disconnected".to_string());
                                 self.exit_after_next_draw = true;
                                 tui.frame_requester().schedule_frame();
                             }
                         }
                     }
                 }
-                maybe_fatal = fatal_exit_rx.recv() => {
+                maybe_fatal = async {
+                    if let Some(rx) = fatal_exit_rx.as_mut() {
+                        rx.recv().await
+                    } else {
+                        None
+                    }
+                }, if has_backend => {
                     let Some(message) = maybe_fatal else {
                         continue;
                     };
@@ -1269,25 +1269,22 @@ impl RenderAppState {
                 return;
             }
             if self.bottom_pane.composer().is_empty() {
-                match self.session_kind {
-                    RenderAppSessionKind::PromptScreen => {
-                        self.prompt_action = Some(PromptScreenAction::CancelledByUser);
-                    }
-                    RenderAppSessionKind::RenderOnlyTurn => {
-                        // Preserve any live output (for example pending "Explored" / "Ran" cells)
-                        // in the transcript before clearing the inline viewport on exit.
-                        self.processor.flush_pending_exploring_cell();
-                        self.processor.flush_pending_success_ran_cell();
+                if self.codex_op_tx.is_none() {
+                    self.prompt_action = Some(PromptScreenAction::CancelledByUser);
+                } else {
+                    // Preserve any live output (for example pending "Explored" / "Ran" cells)
+                    // in the transcript before clearing the inline viewport on exit.
+                    self.processor.flush_pending_exploring_cell();
+                    self.processor.flush_pending_success_ran_cell();
 
-                        self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
+                    self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
 
-                        // Treat Ctrl+C as an explicit user cancellation, even if the turn just
-                        // finished, so callers can stop multi-round loops reliably.
-                        if !matches!(self.exit_reason, ExitReason::Fatal(_)) {
-                            self.exit_reason = ExitReason::UserRequested;
-                        }
-                        self.exit_after_next_draw = true;
+                    // Treat Ctrl+C as an explicit user cancellation, even if the turn just
+                    // finished, so callers can stop multi-round loops reliably.
+                    if !matches!(self.exit_reason, ExitReason::Fatal(_)) {
+                        self.exit_reason = ExitReason::UserRequested;
                     }
+                    self.exit_after_next_draw = true;
                 }
             } else {
                 self.bottom_pane.composer_mut().clear_for_ctrl_c();
@@ -1313,15 +1310,12 @@ impl RenderAppState {
                     .composer()
                     .encode_prompt_history_text(&text);
                 self.prompt_history.record_submission(&history_text);
-                match self.session_kind {
-                    RenderAppSessionKind::PromptScreen => {
-                        self.prompt_action = Some(PromptScreenAction::Submitted(text));
-                    }
-                    RenderAppSessionKind::RenderOnlyTurn => {
-                        self.queued_user_messages.push_back(text);
-                        self.refresh_queued_user_messages();
-                        frame_requester.schedule_frame();
-                    }
+                if self.codex_op_tx.is_none() {
+                    self.prompt_action = Some(PromptScreenAction::Submitted(text));
+                } else {
+                    self.queued_user_messages.push_back(text);
+                    self.refresh_queued_user_messages();
+                    frame_requester.schedule_frame();
                 }
             }
             InputResult::Command(cmd) => match cmd {
@@ -1330,27 +1324,24 @@ impl RenderAppState {
                     frame_requester.schedule_frame();
                 }
                 SlashCommand::Exit => {
-                    match self.session_kind {
-                        RenderAppSessionKind::PromptScreen => {
-                            self.prompt_action = Some(PromptScreenAction::CancelledByUser);
-                        }
-                        RenderAppSessionKind::RenderOnlyTurn => {
-                            // Preserve any live output (for example pending "Explored" / "Ran"
-                            // cells) in the transcript before clearing the inline viewport on
-                            // exit.
-                            self.processor.flush_pending_exploring_cell();
-                            self.processor.flush_pending_success_ran_cell();
+                    if self.codex_op_tx.is_none() {
+                        self.prompt_action = Some(PromptScreenAction::CancelledByUser);
+                    } else {
+                        // Preserve any live output (for example pending "Explored" / "Ran"
+                        // cells) in the transcript before clearing the inline viewport on
+                        // exit.
+                        self.processor.flush_pending_exploring_cell();
+                        self.processor.flush_pending_success_ran_cell();
 
-                            self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
+                        self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
 
-                            // Treat /exit as an explicit user cancellation, even if the turn just
-                            // finished, so callers can stop multi-round loops reliably.
-                            if !matches!(self.exit_reason, ExitReason::Fatal(_)) {
-                                self.exit_reason = ExitReason::UserRequested;
-                            }
-                            self.exit_after_next_draw = true;
-                            frame_requester.schedule_frame();
+                        // Treat /exit as an explicit user cancellation, even if the turn just
+                        // finished, so callers can stop multi-round loops reliably.
+                        if !matches!(self.exit_reason, ExitReason::Fatal(_)) {
+                            self.exit_reason = ExitReason::UserRequested;
                         }
+                        self.exit_after_next_draw = true;
+                        frame_requester.schedule_frame();
                     }
                 }
                 SlashCommand::Theme => {
@@ -1437,19 +1428,14 @@ impl RenderAppState {
                     return Ok(());
                 }
 
-                match self.session_kind {
-                    RenderAppSessionKind::PromptScreen => {
-                        self.should_pad_prompt_viewport = self.should_pad_prompt_viewport
-                            || should_pad_prompt_after_history_insert(&display);
-                    }
-                    RenderAppSessionKind::RenderOnlyTurn => {
-                        if !cell.is_stream_continuation() {
-                            if self.has_emitted_history_lines {
-                                display.insert(0, Line::from(""));
-                            } else {
-                                self.has_emitted_history_lines = true;
-                            }
-                        }
+                if self.codex_op_tx.is_none() {
+                    self.should_pad_prompt_viewport = self.should_pad_prompt_viewport
+                        || should_pad_prompt_after_history_insert(&display);
+                } else if !cell.is_stream_continuation() {
+                    if self.has_emitted_history_lines {
+                        display.insert(0, Line::from(""));
+                    } else {
+                        self.has_emitted_history_lines = true;
                     }
                 }
 
@@ -1494,9 +1480,10 @@ impl RenderAppState {
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::StartCommitAnimation => {
-                if matches!(self.session_kind, RenderAppSessionKind::PromptScreen) {
-                    return Ok(());
-                }
+                anyhow::ensure!(
+                    self.codex_op_tx.is_some(),
+                    "internal error: StartCommitAnimation requires backend channels",
+                );
                 if self
                     .commit_anim_running
                     .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
@@ -1513,21 +1500,24 @@ impl RenderAppState {
                 }
             }
             AppEvent::StopCommitAnimation => {
-                if matches!(self.session_kind, RenderAppSessionKind::PromptScreen) {
-                    return Ok(());
-                }
+                anyhow::ensure!(
+                    self.codex_op_tx.is_some(),
+                    "internal error: StopCommitAnimation requires backend channels",
+                );
                 self.commit_anim_running.store(false, Ordering::Release);
             }
             AppEvent::CommitTick => {
-                if matches!(self.session_kind, RenderAppSessionKind::PromptScreen) {
-                    return Ok(());
-                }
+                anyhow::ensure!(
+                    self.codex_op_tx.is_some(),
+                    "internal error: CommitTick requires backend channels",
+                );
                 self.processor.on_commit_tick();
             }
             AppEvent::CodexEvent(event) => {
-                if matches!(self.session_kind, RenderAppSessionKind::PromptScreen) {
-                    return Ok(());
-                }
+                anyhow::ensure!(
+                    self.codex_op_tx.is_some(),
+                    "internal error: CodexEvent requires backend channels",
+                );
                 self.handle_codex_event(tui.frame_requester(), event)?;
             }
             AppEvent::CodexOp(op) => match op {
@@ -1541,9 +1531,10 @@ impl RenderAppState {
                     );
                 }
                 _ => {
-                    if matches!(self.session_kind, RenderAppSessionKind::RenderOnlyTurn) {
-                        let _ = self.codex_op_tx.send(op);
-                    }
+                    let Some(tx) = self.codex_op_tx.as_ref() else {
+                        anyhow::bail!("internal error: unexpected {op:?} without backend channels");
+                    };
+                    let _ = tx.send(op);
                 }
             },
             AppEvent::StartFileSearch(query) => {
@@ -1556,9 +1547,10 @@ impl RenderAppState {
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::FatalExitRequest(message) => {
-                if matches!(self.session_kind, RenderAppSessionKind::PromptScreen) {
-                    return Ok(());
-                }
+                anyhow::ensure!(
+                    self.codex_op_tx.is_some(),
+                    "internal error: FatalExitRequest requires backend channels",
+                );
                 self.exit_reason = ExitReason::Fatal(message);
                 self.bottom_pane.set_task_running(false);
                 self.exit_after_next_draw = true;
@@ -1994,7 +1986,7 @@ mod tests {
         let mut app = RenderAppState::new(
             processor,
             app_event_tx,
-            op_tx,
+            Some(op_tx),
             bottom_pane,
             crate::prompt_history_store::PromptHistoryStore::new(),
             file_search,
@@ -2113,7 +2105,7 @@ mod tests {
         let mut app = RenderAppState::new(
             processor,
             app_event_tx,
-            op_tx,
+            Some(op_tx),
             bottom_pane,
             crate::prompt_history_store::PromptHistoryStore::new(),
             file_search,
@@ -2203,7 +2195,7 @@ mod tests {
         let mut app = RenderAppState::new(
             processor,
             app_event_tx,
-            op_tx,
+            Some(op_tx),
             bottom_pane,
             crate::prompt_history_store::PromptHistoryStore::new(),
             file_search,
@@ -2304,7 +2296,7 @@ mod tests {
         let mut app = RenderAppState::new(
             processor,
             app_event_tx,
-            op_tx,
+            Some(op_tx),
             bottom_pane,
             crate::prompt_history_store::PromptHistoryStore::new(),
             file_search,
@@ -2360,7 +2352,7 @@ mod tests {
         let mut app = RenderAppState::new(
             processor,
             app_event_tx,
-            op_tx,
+            Some(op_tx),
             bottom_pane,
             crate::prompt_history_store::PromptHistoryStore::new(),
             file_search,
@@ -2450,7 +2442,7 @@ mod tests {
         let mut app = RenderAppState::new(
             processor,
             app_event_tx,
-            op_tx,
+            Some(op_tx),
             bottom_pane,
             crate::prompt_history_store::PromptHistoryStore::new(),
             file_search,
@@ -2503,7 +2495,7 @@ mod tests {
         let mut app = RenderAppState::new(
             processor,
             app_event_tx,
-            op_tx,
+            Some(op_tx),
             bottom_pane,
             crate::prompt_history_store::PromptHistoryStore::new(),
             file_search,
@@ -2546,7 +2538,7 @@ mod tests {
         let mut app = RenderAppState::new(
             processor,
             app_event_tx,
-            op_tx,
+            Some(op_tx),
             bottom_pane,
             crate::prompt_history_store::PromptHistoryStore::new(),
             file_search,
@@ -2596,7 +2588,7 @@ mod tests {
         let mut app = RenderAppState::new(
             processor,
             app_event_tx,
-            op_tx,
+            Some(op_tx),
             bottom_pane,
             crate::prompt_history_store::PromptHistoryStore::new(),
             file_search,
@@ -2643,7 +2635,7 @@ mod tests {
         let mut app = RenderAppState::new(
             processor,
             app_event_tx,
-            op_tx,
+            Some(op_tx),
             bottom_pane,
             crate::prompt_history_store::PromptHistoryStore::new(),
             file_search,
@@ -2703,7 +2695,7 @@ mod tests {
         let mut app = RenderAppState::new(
             processor,
             app_event_tx,
-            op_tx,
+            Some(op_tx),
             bottom_pane,
             crate::prompt_history_store::PromptHistoryStore::new(),
             file_search,
@@ -2745,7 +2737,6 @@ mod tests {
         let (tx_raw, mut rx_app) = unbounded_channel::<AppEvent>();
         let app_event_tx = AppEventSender::new(tx_raw);
 
-        let (op_tx, _op_rx) = unbounded_channel::<Op>();
         let bottom_pane = BottomPane::new(BottomPaneParams {
             frame_requester: crate::tui::FrameRequester::test_dummy(),
             enhanced_keys_supported: false,
@@ -2757,7 +2748,6 @@ mod tests {
         let file_search = FileSearchManager::new(std::env::temp_dir(), app_event_tx.clone());
         let mut app = RenderAppState::new_prompt_screen(
             app_event_tx,
-            op_tx,
             bottom_pane,
             crate::prompt_history_store::PromptHistoryStore::new(),
             file_search,
@@ -2809,7 +2799,6 @@ mod tests {
         let (tx_raw, mut rx_app) = unbounded_channel::<AppEvent>();
         let app_event_tx = AppEventSender::new(tx_raw);
 
-        let (op_tx, _op_rx) = unbounded_channel::<Op>();
         let bottom_pane = BottomPane::new(BottomPaneParams {
             frame_requester: crate::tui::FrameRequester::test_dummy(),
             enhanced_keys_supported: false,
@@ -2821,7 +2810,6 @@ mod tests {
         let file_search = FileSearchManager::new(std::env::temp_dir(), app_event_tx.clone());
         let mut app = RenderAppState::new_prompt_screen(
             app_event_tx,
-            op_tx,
             bottom_pane,
             crate::prompt_history_store::PromptHistoryStore::new(),
             file_search,
@@ -2859,7 +2847,6 @@ mod tests {
         let (tx_raw, mut rx_app) = unbounded_channel::<AppEvent>();
         let app_event_tx = AppEventSender::new(tx_raw);
 
-        let (op_tx, _op_rx) = unbounded_channel::<Op>();
         let bottom_pane = BottomPane::new(BottomPaneParams {
             frame_requester: crate::tui::FrameRequester::test_dummy(),
             enhanced_keys_supported: false,
@@ -2871,7 +2858,6 @@ mod tests {
         let file_search = FileSearchManager::new(std::env::temp_dir(), app_event_tx.clone());
         let mut app = RenderAppState::new_prompt_screen(
             app_event_tx,
-            op_tx,
             bottom_pane,
             crate::prompt_history_store::PromptHistoryStore::new(),
             file_search,
@@ -2943,7 +2929,7 @@ mod tests {
         let mut app = RenderAppState::new(
             processor,
             app_event_tx,
-            op_tx,
+            Some(op_tx),
             bottom_pane,
             crate::prompt_history_store::PromptHistoryStore::new(),
             file_search,
@@ -3032,7 +3018,7 @@ mod tests {
         let mut app = RenderAppState::new(
             processor,
             app_event_tx,
-            op_tx,
+            Some(op_tx),
             bottom_pane,
             crate::prompt_history_store::PromptHistoryStore::new(),
             file_search,
@@ -3122,7 +3108,7 @@ mod tests {
         let mut app = RenderAppState::new(
             processor,
             app_event_tx,
-            op_tx,
+            Some(op_tx),
             bottom_pane,
             crate::prompt_history_store::PromptHistoryStore::new(),
             file_search,
@@ -4182,7 +4168,7 @@ mod tests {
         let mut app = RenderAppState::new(
             proc,
             app_event_tx,
-            codex_op_tx,
+            Some(codex_op_tx),
             bottom_pane,
             crate::prompt_history_store::PromptHistoryStore::new(),
             file_search,

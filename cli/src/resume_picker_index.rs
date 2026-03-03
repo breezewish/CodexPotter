@@ -29,7 +29,10 @@ pub fn discover_resumable_projects(workdir: &Path) -> anyhow::Result<Vec<ResumeP
     let mut rows = Vec::new();
 
     for entry in walker {
-        let entry = entry?;
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => continue,
+        };
         if !entry.file_type().is_some_and(|kind| kind.is_file()) {
             continue;
         }
@@ -37,9 +40,8 @@ pub fn discover_resumable_projects(workdir: &Path) -> anyhow::Result<Vec<ResumeP
             continue;
         }
 
-        match row_for_progress_file(workdir, entry.path())? {
-            Some(row) => rows.push(row),
-            None => continue,
+        if let Ok(Some(row)) = row_for_progress_file(workdir, entry.path()) {
+            rows.push(row);
         }
     }
 
@@ -61,15 +63,24 @@ fn row_for_progress_file(
         return Ok(None);
     }
 
-    let metadata = std::fs::metadata(&potter_rollout_path)?;
-    let updated_at = metadata.modified()?;
+    let metadata = match std::fs::metadata(&potter_rollout_path) {
+        Ok(metadata) => metadata,
+        Err(_) => return Ok(None),
+    };
+    let updated_at = match metadata.modified() {
+        Ok(updated_at) => updated_at,
+        Err(_) => return Ok(None),
+    };
     let created_at = created_at_from_progress_file(
         &workdir.join(".codexpotter").join("projects"),
         progress_file,
     )
     .unwrap_or(updated_at);
 
-    let potter_rollout_lines = crate::potter_rollout::read_lines(&potter_rollout_path)?;
+    let potter_rollout_lines = match crate::potter_rollout::read_lines(&potter_rollout_path) {
+        Ok(lines) => lines,
+        Err(_) => return Ok(None),
+    };
     if potter_rollout_lines.is_empty() {
         return Ok(None);
     }
@@ -84,8 +95,14 @@ fn row_for_progress_file(
         return Ok(None);
     }
 
-    let short_title = crate::project::progress_file_short_title(&resolved.progress_file)?;
-    let git_branch = crate::project::progress_file_git_branch(&resolved.progress_file)?;
+    let short_title = match crate::project::progress_file_short_title(&resolved.progress_file) {
+        Ok(short_title) => short_title,
+        Err(_) => return Ok(None),
+    };
+    let git_branch = match crate::project::progress_file_git_branch(&resolved.progress_file) {
+        Ok(git_branch) => git_branch,
+        Err(_) => return Ok(None),
+    };
 
     let user_request = match short_title {
         Some(title) => title,
@@ -363,6 +380,18 @@ git_branch: "{git_branch}"
             "",
         )
         .expect("write empty rollout");
+
+        // Unrecognized potter-rollout schema
+        let main_unknown_schema =
+            write_main(workdir, ".codexpotter/projects/2026/02/28/5", None, None);
+        std::fs::write(
+            main_unknown_schema
+                .parent()
+                .expect("project dir")
+                .join(crate::potter_rollout::POTTER_ROLLOUT_FILENAME),
+            r#"{"type":"session_started","user_message":"hello","user_prompt_file":"MAIN.md"}"#,
+        )
+        .expect("write unknown schema rollout");
 
         // Missing referenced upstream rollout file
         let main_missing_upstream =

@@ -1,4 +1,5 @@
 use std::io::Write;
+use std::path::PathBuf;
 use std::time::Instant;
 
 use anyhow::Context;
@@ -22,10 +23,10 @@ pub struct ExecJsonRoundUi<W: Write> {
 }
 
 impl<W: Write> ExecJsonRoundUi<W> {
-    pub fn new(output: W) -> Self {
+    pub fn new(output: W, workdir: PathBuf) -> Self {
         Self {
             output,
-            processor: crate::exec_jsonl::ExecJsonlEventProcessor::default(),
+            processor: crate::exec_jsonl::ExecJsonlEventProcessor::with_workdir(workdir),
             json_turn_open: false,
             token_usage: TokenUsage::default(),
             thread_id: None,
@@ -33,7 +34,14 @@ impl<W: Write> ExecJsonRoundUi<W> {
         }
     }
 
-    fn write_jsonl_event(&mut self, event: &crate::exec_jsonl::ExecJsonlEvent) -> anyhow::Result<()> {
+    pub fn into_output(self) -> W {
+        self.output
+    }
+
+    fn write_jsonl_event(
+        &mut self,
+        event: &crate::exec_jsonl::ExecJsonlEvent,
+    ) -> anyhow::Result<()> {
         serde_json::to_writer(&mut self.output, event).context("serialize exec jsonl event")?;
         self.output
             .write_all(b"\n")
@@ -74,13 +82,12 @@ impl<W: Write> ExecJsonRoundUi<W> {
 
     fn synthesize_round_fatal_closure(&mut self, message: &str) -> anyhow::Result<()> {
         if self.json_turn_open {
-            let event = crate::exec_jsonl::ExecJsonlEvent::TurnFailed(
-                crate::exec_jsonl::TurnFailedEvent {
+            let event =
+                crate::exec_jsonl::ExecJsonlEvent::TurnFailed(crate::exec_jsonl::TurnFailedEvent {
                     error: crate::exec_jsonl::ThreadErrorEvent {
                         message: message.to_string(),
                     },
-                },
-            );
+                });
             self.observe_json_turn_state(&event);
             self.write_jsonl_event(&event)?;
         }
@@ -115,6 +122,12 @@ impl<W: Write> crate::round_runner::PotterRoundUi for ExecJsonRoundUi<W> {
                 ..
             } = params;
 
+            self.processor.reset_round_state();
+            self.json_turn_open = false;
+            self.token_usage = TokenUsage::default();
+            self.thread_id = None;
+            self.saw_round_finished = false;
+
             codex_op_tx
                 .send(Op::UserInput {
                     items: vec![UserInput::Text {
@@ -145,6 +158,24 @@ impl<W: Write> crate::round_runner::PotterRoundUi for ExecJsonRoundUi<W> {
                                 exit_reason: ExitReason::Fatal(message),
                             });
                         };
+
+                        if let EventMsg::RequestUserInput(ev) = &event.msg {
+                            let message = format!(
+                                "unsupported interactive request: RequestUserInput call_id={}",
+                                ev.call_id
+                            );
+                            self.write_jsonl_event(&crate::exec_jsonl::ExecJsonlEvent::Error(
+                                crate::exec_jsonl::ThreadErrorEvent {
+                                    message: message.clone(),
+                                },
+                            ))?;
+                            self.synthesize_round_fatal_closure(&message)?;
+                            return Ok(AppExitInfo {
+                                token_usage: self.token_usage.clone(),
+                                thread_id: self.thread_id,
+                                exit_reason: ExitReason::Fatal(message),
+                            });
+                        }
 
                         let exit_reason = match &event.msg {
                             EventMsg::PotterRoundFinished { outcome } => Some(exit_reason_from_outcome(outcome)),

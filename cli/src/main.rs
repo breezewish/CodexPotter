@@ -3,8 +3,9 @@ mod app_server_protocol;
 mod atomic_write;
 mod codex_compat;
 mod config;
-mod exec_jsonl;
+mod exec;
 mod exec_json_round_ui;
+mod exec_jsonl;
 mod global_gitignore;
 mod path_utils;
 mod potter_rollout;
@@ -99,6 +100,14 @@ enum CliCommand {
         /// Project path to resolve to a unique `MAIN.md`. If omitted, open a picker UI.
         project_path: Option<PathBuf>,
     },
+    /// Run CodexPotter non-interactively and emit a machine-readable JSONL event stream.
+    Exec {
+        /// Prompt to run. If omitted, read from stdin.
+        prompt: Option<String>,
+        /// Emit a strict JSONL event stream to stdout.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn parse_cli() -> Cli {
@@ -139,6 +148,24 @@ async fn main() -> anyhow::Result<()> {
             None
         }
     };
+
+    if let Some(CliCommand::Exec { prompt, json }) = cli.command.as_ref() {
+        if !json {
+            eprintln!("error: currently only --json output is supported for exec");
+            std::process::exit(1);
+        }
+
+        let exit_code = crate::exec::run_exec_json(
+            &workdir,
+            prompt.clone(),
+            cli.rounds,
+            codex_bin.clone(),
+            backend_launch,
+            codex_compat_home.clone(),
+        )
+        .await;
+        std::process::exit(exit_code);
+    }
 
     let mut ui = codex_tui::CodexPotterTui::new()?;
 
@@ -505,6 +532,18 @@ mod tests {
             panic!("expected resume command, got: {:?}", cli.command);
         };
         assert_eq!(project_path, None);
+    }
+
+    #[test]
+    fn exec_subcommand_parses_prompt_and_json_flag() {
+        let cli =
+            Cli::try_parse_from(["codex-potter", "exec", "hello", "--json"]).expect("parse args");
+
+        let Some(CliCommand::Exec { prompt, json }) = cli.command else {
+            panic!("expected exec command, got: {:?}", cli.command);
+        };
+        assert_eq!(prompt, Some("hello".to_string()));
+        assert!(json);
     }
 
     #[test]

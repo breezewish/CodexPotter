@@ -840,7 +840,7 @@ fn handle_codex_event(
             }
             EventMsg::Error(err) if should_forward && !error_is_recoverable => {
                 Some(PotterRoundOutcome::Fatal {
-                message: err.message.clone(),
+                    message: err.message.clone(),
                 })
             }
             _ => None,
@@ -1393,7 +1393,9 @@ mod stream_recovery_tests {
             &event_tx,
         );
 
-        let forwarded = event_rx.try_recv().expect("expected forwarded rollback event");
+        let forwarded = event_rx
+            .try_recv()
+            .expect("expected forwarded rollback event");
         assert!(matches!(forwarded.msg, EventMsg::ThreadRolledBack(_)));
         assert!(
             event_rx.try_recv().is_err(),
@@ -1452,7 +1454,9 @@ mod stream_recovery_tests {
             &event_tx,
         );
 
-        let forwarded_turn_complete = event_rx.try_recv().expect("expected forwarded TurnComplete");
+        let forwarded_turn_complete = event_rx
+            .try_recv()
+            .expect("expected forwarded TurnComplete");
         assert!(matches!(
             forwarded_turn_complete.msg,
             EventMsg::TurnComplete(_)
@@ -1468,7 +1472,10 @@ mod stream_recovery_tests {
             ),
             "expected retry attempt 1"
         );
-        assert!(!recovery.has_finished_round, "round should still be running");
+        assert!(
+            !recovery.has_finished_round,
+            "round should still be running"
+        );
 
         handle_codex_event(
             Event {

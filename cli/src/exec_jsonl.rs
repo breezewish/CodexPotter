@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use codex_protocol::protocol::EventMsg;
 use serde::Deserialize;
@@ -358,6 +359,7 @@ struct RunningCollabToolCall {
 
 #[derive(Debug, Default)]
 pub struct ExecJsonlEventProcessor {
+    workdir: Option<PathBuf>,
     next_item_id: u64,
     running_commands: HashMap<String, RunningCommand>,
     running_patch_applies: HashMap<String, codex_protocol::protocol::PatchApplyBeginEvent>,
@@ -368,13 +370,20 @@ pub struct ExecJsonlEventProcessor {
 }
 
 impl ExecJsonlEventProcessor {
+    pub fn with_workdir(workdir: PathBuf) -> Self {
+        Self {
+            workdir: Some(workdir),
+            ..Self::default()
+        }
+    }
+
     pub fn collect_event(&mut self, msg: &EventMsg) -> Vec<ExecJsonlEvent> {
         match msg {
-            EventMsg::SessionConfigured(ev) => vec![ExecJsonlEvent::ThreadStarted(
-                ThreadStartedEvent {
+            EventMsg::SessionConfigured(ev) => {
+                vec![ExecJsonlEvent::ThreadStarted(ThreadStartedEvent {
                     thread_id: ev.session_id.to_string(),
-                },
-            )],
+                })]
+            }
             EventMsg::TokenCount(ev) => {
                 if let Some(info) = &ev.info {
                     self.last_total_token_usage = Some(info.total_token_usage.clone());
@@ -395,14 +404,16 @@ impl ExecJsonlEventProcessor {
                     }),
                 },
             })],
-            EventMsg::AgentReasoning(ev) => vec![ExecJsonlEvent::ItemCompleted(ItemCompletedEvent {
-                item: ThreadItem {
-                    id: self.next_item_id(),
-                    details: ThreadItemDetails::Reasoning(ReasoningItem {
-                        text: ev.text.clone(),
-                    }),
-                },
-            })],
+            EventMsg::AgentReasoning(ev) => {
+                vec![ExecJsonlEvent::ItemCompleted(ItemCompletedEvent {
+                    item: ThreadItem {
+                        id: self.next_item_id(),
+                        details: ThreadItemDetails::Reasoning(ReasoningItem {
+                            text: ev.text.clone(),
+                        }),
+                    },
+                })]
+            }
             EventMsg::ExecCommandBegin(ev) => self.handle_exec_command_begin(ev),
             EventMsg::ExecCommandEnd(ev) => self.handle_exec_command_end(ev),
             EventMsg::PatchApplyBegin(ev) => {
@@ -455,10 +466,12 @@ impl ExecJsonlEventProcessor {
             EventMsg::CollabCloseBegin(ev) => self.handle_collab_close_begin(ev),
             EventMsg::CollabCloseEnd(ev) => self.handle_collab_close_end(ev),
             EventMsg::PotterRoundStarted { current, total } => {
-                vec![ExecJsonlEvent::PotterRoundStarted(PotterRoundStartedEvent {
-                    current: *current,
-                    total: *total,
-                })]
+                vec![ExecJsonlEvent::PotterRoundStarted(
+                    PotterRoundStartedEvent {
+                        current: *current,
+                        total: *total,
+                    },
+                )]
             }
             EventMsg::PotterRoundFinished { outcome } => {
                 vec![ExecJsonlEvent::PotterRoundCompleted(
@@ -477,7 +490,7 @@ impl ExecJsonlEventProcessor {
                     duration_secs: duration.as_secs(),
                     git_commit_start: git_commit_start.clone(),
                     git_commit_end: git_commit_end.clone(),
-                    progress_file: user_prompt_file.to_string_lossy().to_string(),
+                    progress_file: self.resolve_path(user_prompt_file),
                 },
             )],
             EventMsg::PotterStreamRecoveryUpdate {
@@ -491,9 +504,11 @@ impl ExecJsonlEventProcessor {
                     error_message: error_message.clone(),
                 },
             )],
-            EventMsg::PotterStreamRecoveryRecovered => vec![ExecJsonlEvent::PotterStreamRecoveryRecovered(
-                PotterStreamRecoveryRecoveredEvent {},
-            )],
+            EventMsg::PotterStreamRecoveryRecovered => {
+                vec![ExecJsonlEvent::PotterStreamRecoveryRecovered(
+                    PotterStreamRecoveryRecoveredEvent {},
+                )]
+            }
             EventMsg::PotterStreamRecoveryGaveUp {
                 error_message,
                 attempts,
@@ -509,10 +524,29 @@ impl ExecJsonlEventProcessor {
         }
     }
 
+    pub fn reset_round_state(&mut self) {
+        self.running_commands.clear();
+        self.running_patch_applies.clear();
+        self.running_todo_list = None;
+        self.last_total_token_usage = None;
+        self.last_critical_error = None;
+        self.running_collab_tool_calls.clear();
+    }
+
     fn next_item_id(&mut self) -> String {
         let id = self.next_item_id;
         self.next_item_id = self.next_item_id.saturating_add(1);
         format!("item_{id}")
+    }
+
+    fn resolve_path(&self, path: &PathBuf) -> String {
+        if path.is_absolute() {
+            return path.to_string_lossy().to_string();
+        }
+        match &self.workdir {
+            Some(workdir) => workdir.join(path).to_string_lossy().to_string(),
+            None => path.to_string_lossy().to_string(),
+        }
     }
 
     fn handle_turn_complete(&mut self) -> Vec<ExecJsonlEvent> {
@@ -597,9 +631,12 @@ impl ExecJsonlEventProcessor {
             }
         }
 
-        let error = self.last_critical_error.take().unwrap_or_else(|| ThreadErrorEvent {
-            message: format!("turn aborted: {:?}", &ev.reason),
-        });
+        let error = self
+            .last_critical_error
+            .take()
+            .unwrap_or_else(|| ThreadErrorEvent {
+                message: format!("turn aborted: {:?}", &ev.reason),
+            });
 
         out.push(ExecJsonlEvent::TurnFailed(TurnFailedEvent { error }));
 
@@ -1040,10 +1077,12 @@ fn potter_round_completed_from_outcome(
                 message: Some(message.clone()),
             }
         }
-        codex_protocol::protocol::PotterRoundOutcome::Fatal { message } => PotterRoundCompletedEvent {
-            outcome: PotterRoundCompletedOutcome::Fatal,
-            message: Some(message.clone()),
-        },
+        codex_protocol::protocol::PotterRoundOutcome::Fatal { message } => {
+            PotterRoundCompletedEvent {
+                outcome: PotterRoundCompletedOutcome::Fatal,
+                message: Some(message.clone()),
+            }
+        }
         codex_protocol::protocol::PotterRoundOutcome::UserRequested => PotterRoundCompletedEvent {
             outcome: PotterRoundCompletedOutcome::Fatal,
             message: Some(String::from("user requested")),
@@ -1369,10 +1408,12 @@ mod tests {
                 current: 1,
                 total: 10,
             }),
-            vec![ExecJsonlEvent::PotterRoundStarted(PotterRoundStartedEvent {
-                current: 1,
-                total: 10,
-            })]
+            vec![ExecJsonlEvent::PotterRoundStarted(
+                PotterRoundStartedEvent {
+                    current: 1,
+                    total: 10,
+                }
+            )]
         );
 
         assert_eq!(
@@ -1381,10 +1422,12 @@ mod tests {
                     message: "nope".to_string()
                 },
             }),
-            vec![ExecJsonlEvent::PotterRoundCompleted(PotterRoundCompletedEvent {
-                outcome: PotterRoundCompletedOutcome::TaskFailed,
-                message: Some("nope".to_string()),
-            })]
+            vec![ExecJsonlEvent::PotterRoundCompleted(
+                PotterRoundCompletedEvent {
+                    outcome: PotterRoundCompletedOutcome::TaskFailed,
+                    message: Some("nope".to_string()),
+                }
+            )]
         );
     }
 

@@ -1,17 +1,20 @@
-# TUI Design Notes (Render-Only Potter Mode)
+# TUI Design Notes (Potter Round Renderer)
 
 This page documents the `codex-potter` TUI as it is used today: a **prompt screen** plus a
-**render-only** runner that displays streamed Codex events and lets the user queue follow-up tasks.
+**round renderer** that displays streamed Codex events and lets the user queue follow-up tasks.
 
 Implementation note: while there are two user-facing "screens", they are driven by a single shared
 event loop (`RenderAppState` in `tui/src/app_server_render.rs`). The prompt screen is an "idle"
-session (no backend event stream), while the render-only runner is a "turn" session that consumes
-`EventMsg` values from the app-server.
+session (no backend event stream), while the round renderer consumes `EventMsg` values until the
+control plane emits `EventMsg::PotterRoundFinished`.
+
+A single Potter round may include multiple upstream `turn/start` calls (stream recovery), so this
+renderer is not a 1:1 mapping to upstream turns.
 
 Scope:
 
 - bottom pane (`BottomPane` / `ChatComposer`) behavior
-- how render-only consumes protocol events and turns them into rendered cells
+- how the round renderer consumes protocol events and turns them into rendered cells
 - output folding/coalescing rules ("Explored", successful "Ran")
 - token usage + context window indicator
 - status header updates from reasoning ("thinking") events
@@ -24,7 +27,7 @@ Non-goals:
 
 ## High-level UI layout
 
-Render-only mode draws an inline viewport that is conceptually split into two regions:
+The round renderer draws an inline viewport that is conceptually split into two regions:
 
 - **Transient area** (top of the viewport): live, not-yet-committed lines such as the coalesced
   "Explored" / successful "Ran" blocks.
@@ -34,8 +37,8 @@ Render-only mode draws an inline viewport that is conceptually split into two re
 Implementation entry point:
 
 - `tui/src/app_server_render.rs`: `prompt_user_with_tui(...)`,
-  `run_render_only_with_tui_options_and_queue(...)`, and `RenderAppState::run(...)`
-- `tui/src/app_server_render.rs`: `render_render_only_viewport(...)`
+  `run_round_with_tui_options_and_queue(...)`, and `RenderAppState::run(...)`
+- `tui/src/app_server_render.rs`: `render_runner_viewport(...)`
 
 ## Bottom pane (`tui/src/bottom_pane/`)
 
@@ -60,9 +63,9 @@ The composer owns text editing, paste-burst handling, history navigation, and po
 
 Deep dive: `tui-chat-composer.md`.
 
-### Queued prompts (turn is running)
+### Queued prompts (round is running)
 
-When a turn is running, `Enter` queues the current composer text instead of submitting a new turn.
+When a round is running, `Enter` queues the current composer text instead of submitting a new task.
 
 - Collection:
   - `tui/src/app_server_render.rs`: `RenderAppState::handle_key_event(...)`
@@ -74,7 +77,7 @@ When a turn is running, `Enter` queues the current composer text instead of subm
 Cross-round persistence:
 
 - `tui/src/potter_tui.rs`: `CodexPotterTui` stores a `VecDeque<String>` of queued prompts and passes
-  it into / out of the render-only runner so queued prompts survive across rounds.
+  it into / out of the round renderer so queued prompts survive across rounds.
 - `cli/src/main.rs`: after the current project ends, queued prompts are treated as **new projects**
   (new `.codexpotter/projects/...` directories) rather than continuing the same context.
 
@@ -85,18 +88,18 @@ Cross-round persistence:
 - Code:
   - `tui/src/external_editor_integration.rs`: editor invocation
   - `tui/src/bottom_pane/mod.rs`: `PromptFooterOverride::ExternalEditorHint`
-  - `tui/src/app_server_render.rs`: prompt screen + render-only runner both share the same ctrl+g
+  - `tui/src/app_server_render.rs`: prompt screen + round renderer both share the same ctrl+g
     integration path (set override, draw, run editor, apply edit, clear override).
 
-## Render-only event -> cell pipeline
+## Round renderer event -> cell pipeline
 
 ### Event consumption
 
-Render-only mode consumes `codex_protocol::protocol::EventMsg` values and translates them into
+The round renderer consumes `codex_protocol::protocol::EventMsg` values and translates them into
 renderable `HistoryCell`s.
 
 - `tui/src/app_server_render.rs`:
-  - `RenderOnlyProcessor`: stateful translator (streaming buffer, token usage, coalescing buffers)
+  - `AppServerEventProcessor`: stateful translator (streaming buffer, token usage, coalescing buffers)
   - `RenderAppState::handle_app_event(...)`: processes `AppEvent::CodexEvent(...)`
 
 Design choices:
@@ -118,11 +121,11 @@ Code:
 
 - `tui/src/streaming/`: `StreamController`
 - `tui/src/markdown_stream.rs`: streaming markdown chunking/flush logic
-- `tui/src/app_server_render.rs`: `RenderOnlyProcessor::handle_codex_event(...)`
+- `tui/src/app_server_render.rs`: `AppServerEventProcessor::handle_codex_event(...)`
 
 ## Output folding / coalescing
 
-Render-only mode intentionally buffers some exec output to avoid writing noisy, low-value blocks
+The round renderer intentionally buffers some exec output to avoid writing noisy, low-value blocks
 into the transcript (and because scrollback output cannot be "edited" once emitted).
 
 ### "Explored" folding (read/list/search calls)
@@ -133,7 +136,7 @@ How it works:
 
 - The renderer treats a subset of `ExecCommandEnd` events as "exploring calls" (non-UserShell
   source, parsed commands are a subset of `Read/ListFiles/Search`).
-- These calls are accumulated into `RenderOnlyProcessor::pending_exploring_cell` instead of being
+- These calls are accumulated into `AppServerEventProcessor::pending_exploring_cell` instead of being
   immediately committed to the transcript.
 - While pending, the exploring block is rendered in the transient area above the bottom pane.
 - Rendering coalesces adjacent `Read` parsed commands across call boundaries (including *mixed*
@@ -148,7 +151,7 @@ Code:
 - `tui/src/exec_cell/model.rs`: `ExecCell::is_exploring_cell()`
 - `tui/src/exec_cell/render.rs`: `ExecCell::exploring_display_lines(...)` (Read coalescing +
   deduplication + tree-like `└` prefix)
-- `tui/src/app_server_render.rs`: `RenderOnlyProcessor::pending_exploring_cell` +
+- `tui/src/app_server_render.rs`: `AppServerEventProcessor::pending_exploring_cell` +
   `flush_pending_exploring_cell()`
 
 ### Successful "Ran" folding (hide output + merge adjacent commands)
@@ -162,9 +165,9 @@ How it works:
   - `exit_code == 0`
   - not a "user shell" command
   - not a "unified exec interaction"
-  (See `RenderOnlyProcessor::can_coalesce_success_ran_cell`.)
+  (See `AppServerEventProcessor::can_coalesce_success_ran_cell`.)
 - These coalescable successful `Ran` events are buffered into
-  `RenderOnlyProcessor::pending_success_ran_cell`.
+  `AppServerEventProcessor::pending_success_ran_cell`.
 - The pending "Ran" block is rendered transiently above the bottom pane (separate from "Explored").
 - It is flushed before unrelated transcript inserts, similar to exploring.
 - Rendering rules:
@@ -173,7 +176,7 @@ How it works:
 
 Code:
 
-- `tui/src/app_server_render.rs`: `RenderOnlyProcessor::pending_success_ran_cell` +
+- `tui/src/app_server_render.rs`: `AppServerEventProcessor::pending_success_ran_cell` +
   `flush_pending_success_ran_cell()`
 - `tui/src/exec_cell/render.rs`: `ExecCell::coalesced_success_ran_display_lines(...)`
 
@@ -185,7 +188,7 @@ The UI uses `EventMsg::TokenCount` (and `TurnStarted`) events to keep a best-eff
 - estimated tokens in the *current* context window
 - model context window size (when available)
 
-Render-only behavior:
+Round renderer behavior:
 
 - When `model_context_window` is known and > 0: show **percent remaining**.
 - Otherwise: show **used tokens** as a raw count.
@@ -224,5 +227,5 @@ Code:
   and should stay close to upstream behavior.
 - The potter-specific surfaces are mostly wrappers / glue:
   - `tui/src/potter_tui.rs`
-  - `tui/src/app_server_render.rs` (render-only runner and potter marker events)
+  - `tui/src/app_server_render.rs` (round renderer and potter marker events)
   - small bottom-pane reductions (removing interactive Codex TUI screens)

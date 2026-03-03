@@ -27,7 +27,7 @@ At a high level, the "control plane" is in `cli/`, while the "rendering plane" i
 4. For each round:
    - The CLI spawns an external `codex app-server` process and runs the JSON-RPC bridge
      (`cli/src/app_server_backend.rs`).
-   - The UI runs the "render-only" loop (`tui/src/app_server_render.rs`), which:
+   - The UI runs the round render loop (`tui/src/app_server_render.rs`), which:
      - sends `Op::UserInput` to start the turn,
      - consumes `EventMsg` notifications and renders them as `HistoryCell`s,
      - allows the user to queue additional prompts (stored inside `CodexPotterTui`).
@@ -104,7 +104,7 @@ Purpose: a pure rendering + input handling crate used by `codex-potter-cli`.
 What "potter" uses:
 
 - A prompt screen for collecting the initial project goal.
-- A "render-only" runner that consumes `codex-protocol` events and renders them as cells (markdown,
+- A round renderer that consumes `codex-protocol` events and renders them as cells (markdown,
   diffs, exec outputs, etc.).
 - A bottom pane (`BottomPane` / `ChatComposer`) that can queue additional user prompts while a turn
   is running (those prompts become *new projects* in `codex-potter-cli`, not shared context).
@@ -113,9 +113,9 @@ Key modules:
 
 - `tui/src/potter_tui.rs`: `CodexPotterTui` wrapper that:
   - owns the terminal lifetime (raw mode + cleanup on drop)
-  - exposes `prompt_user(...)` and `render_turn(...)`
+  - exposes `prompt_user(...)` and `render_round(...)`
   - persists queued prompts + composer draft across turns
-- `tui/src/app_server_render.rs`: "render-only" runner that:
+- `tui/src/app_server_render.rs`: round renderer that:
   - draws the history viewport + bottom pane
   - translates `EventMsg` into `HistoryCell`s
   - manages streaming markdown flush / commit animations

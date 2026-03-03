@@ -70,15 +70,15 @@ project/round boundaries and successful project completion as normal history cel
 
 ### TUI renderer (crate: `codex-tui`)
 
-`codex-potter` uses a simplified, render-only subset of the upstream Codex TUI.
+`codex-potter` uses a simplified subset of the upstream Codex TUI.
 
 Key modules:
 
 - `tui/src/potter_tui.rs`: `CodexPotterTui` wrapper that owns terminal lifetime and exposes:
   - `prompt_user(...)` for the initial goal
-  - `render_turn(...)` for a single round
+  - `render_round(...)` for a single round
   - queued prompts + composer draft persistence across rounds
-- `tui/src/app_server_render.rs`: the render-only runner that:
+- `tui/src/app_server_render.rs`: the round renderer that:
   - sends `Op::UserInput` to start the turn
   - consumes `EventMsg` and inserts `HistoryCell`s
   - renders the history viewport + bottom pane until the round finishes
@@ -144,14 +144,14 @@ For each round:
    - `initialize`
    - `thread/start` (approval policy is `never`; sandbox is derived from CLI flags)
    - synthesize and send `EventMsg::SessionConfigured` to the UI
-4. UI starts the render-only runner (`tui/src/app_server_render.rs`), which sends `Op::UserInput`
+4. UI starts the round renderer (`tui/src/app_server_render.rs`), which sends `Op::UserInput`
    to request `turn/start` with the fixed user prompt:
    `Continue working according to the WORKFLOW_INSTRUCTIONS`.
    (The injected developer instructions that point at the progress file are configured earlier via
    `thread/start`.)
 5. Backend forwards `codex/event/*` notifications as `Event` values to the UI. The UI converts them
    into `HistoryCell`s and renders them.
-6. When the control plane emits `EventMsg::PotterRoundFinished`, the UI exits the render-only
+6. When the control plane emits `EventMsg::PotterRoundFinished`, the UI exits the round
    runner. The CLI checks the progress file front matter for `finite_incantatem: true` and decides
    whether to stop the project early (`cli/src/project.rs`).
 
@@ -168,4 +168,4 @@ The prompts intentionally do **not** share a conversation context.
 - The multi-round/project model and progress file conventions are potter-specific (`cli/` +
   `tui/src/potter_tui.rs`).
 - The rendering pipeline is upstream-derived (`tui/`), but simplified to only the parts needed for
-  prompt + render-only operation.
+  prompt + round rendering operation.

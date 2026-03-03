@@ -65,7 +65,7 @@ so the user always sees the initial prompt and round context first.
 
 Implementation detail (`cli/src/resume.rs`): the pre-action replay for an unfinished round includes
 `EventMsg::PotterRoundStarted` and a synthesized trailing `EventMsg::PotterRoundFinished` with a
-`Completed` outcome so the render-only runner exits cleanly. This synthetic `PotterRoundFinished`
+`Completed` outcome so the round renderer exits cleanly. This synthetic `PotterRoundFinished`
 does not render a "round finished" history cell; it only provides a clean exit boundary for the
 renderer.
 

@@ -11,8 +11,8 @@ use crate::bottom_pane::PromptFooterContext;
 use crate::tui;
 use crate::tui::Tui;
 
-/// Parameters for [`CodexPotterTui::render_turn`].
-pub struct RenderTurnParams {
+/// Parameters for [`CodexPotterTui::render_round`].
+pub struct RenderRoundParams {
     pub prompt: String,
     pub pad_before_first_cell: bool,
     pub prompt_footer: PromptFooterContext,
@@ -21,13 +21,13 @@ pub struct RenderTurnParams {
     pub fatal_exit_rx: UnboundedReceiver<String>,
 }
 
-/// `codex-potter`-specific TUI session wrapper:
+/// `codex-potter`-specific TUI wrapper:
 /// - Reuses the legacy composer to collect the initial prompt
-/// - Reuses the single-turn runner pipeline to render each turn
+/// - Reuses the legacy rendering pipeline to render each round
 /// - Attempts to restore terminal state on Drop
 pub struct CodexPotterTui {
     tui: Tui,
-    turns_rendered: bool,
+    has_rendered_round: bool,
     project_started_at: Option<Instant>,
     queued_user_prompts: VecDeque<String>,
     composer_draft: Option<crate::bottom_pane::ChatComposerDraft>,
@@ -50,7 +50,7 @@ impl CodexPotterTui {
         }
         Ok(Self {
             tui: Tui::new(terminal),
-            turns_rendered: false,
+            has_rendered_round: false,
             project_started_at: None,
             queued_user_prompts: VecDeque::new(),
             composer_draft: None,
@@ -122,7 +122,7 @@ impl CodexPotterTui {
         &mut self,
         prompt_footer: PromptFooterContext,
     ) -> anyhow::Result<Option<String>> {
-        let show_startup_banner = !self.turns_rendered;
+        let show_startup_banner = !self.has_rendered_round;
         let composer_draft = self.composer_draft.take();
         let startup_warnings = std::mem::take(&mut self.startup_warnings);
         crate::app_server_render::prompt_user_with_tui(
@@ -136,9 +136,9 @@ impl CodexPotterTui {
         .await
     }
 
-    /// Set the start time for the current CodexPotter project/session.
+    /// Set the start time for the current CodexPotter project.
     ///
-    /// This is used by the turn renderer to display a total elapsed timer next to the round
+    /// This is used by the round renderer to display a total elapsed timer next to the round
     /// prefix (e.g. `Round 3/10 (4m 13s) · ...`).
     pub fn set_project_started_at(&mut self, started_at: Instant) {
         self.project_started_at = Some(started_at);
@@ -193,10 +193,10 @@ impl CodexPotterTui {
         self.queued_user_prompts.pop_front()
     }
 
-    /// Render a single round (render-only runner) until the control plane signals the round
+    /// Render a single Potter round until the control plane signals the round
     /// finished (`EventMsg::PotterRoundFinished`) or the user interrupts.
-    pub async fn render_turn(&mut self, params: RenderTurnParams) -> anyhow::Result<AppExitInfo> {
-        let RenderTurnParams {
+    pub async fn render_round(&mut self, params: RenderRoundParams) -> anyhow::Result<AppExitInfo> {
+        let RenderRoundParams {
             prompt,
             pad_before_first_cell,
             prompt_footer,
@@ -206,30 +206,30 @@ impl CodexPotterTui {
         } = params;
         let Some(project_started_at) = self.project_started_at else {
             anyhow::bail!(
-                "internal error: CodexPotterTui::set_project_started_at must be called before render_turn"
+                "internal error: CodexPotterTui::set_project_started_at must be called before render_round"
             );
         };
         let startup_warnings = std::mem::take(&mut self.startup_warnings);
-        let options = crate::app_server_render::RenderOnlyTurnOptions {
+        let options = crate::app_server_render::RoundRenderOptions {
             render_user_prompt: false,
-            pad_before_first_cell: pad_before_first_cell || self.turns_rendered,
+            pad_before_first_cell: pad_before_first_cell || self.has_rendered_round,
         };
         let mut queued = std::mem::take(&mut self.queued_user_prompts);
         let mut composer_draft = self.composer_draft.take();
-        let backend = crate::app_server_render::RenderOnlyBackendChannels {
+        let backend = crate::app_server_render::RoundBackendChannels {
             codex_op_tx,
             codex_event_rx,
             fatal_exit_rx,
         };
-        let context = crate::app_server_render::RenderOnlyTurnContext {
+        let context = crate::app_server_render::ProjectRenderContext {
             project_started_at,
             prompt_footer,
         };
-        let state = crate::app_server_render::RenderOnlyTurnUiState {
+        let state = crate::app_server_render::RoundUiState {
             queued_user_messages: &mut queued,
             composer_draft: &mut composer_draft,
         };
-        let result = crate::app_server_render::run_render_only_with_tui_options_and_queue(
+        let result = crate::app_server_render::run_round_with_tui_options_and_queue(
             &mut self.tui,
             prompt,
             options,
@@ -241,7 +241,7 @@ impl CodexPotterTui {
         .await;
         self.queued_user_prompts = queued;
         self.composer_draft = composer_draft;
-        self.turns_rendered = true;
+        self.has_rendered_round = true;
         result
     }
 }

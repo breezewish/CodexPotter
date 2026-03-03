@@ -116,7 +116,7 @@ The TUI submits `Op::UserInput { items, final_output_json_schema }` which the br
 
 Other `Op` variants are intentionally ignored in potter mode:
 
-- `Op::Interrupt`: the render-only runner does not track a turn id, so `turn/interrupt` cannot be
+- `Op::Interrupt`: the round renderer does not track a turn id, so `turn/interrupt` cannot be
   called.
 - `Op::GetHistoryEntryRequest`: prompt history is stored locally by `codex-potter` and not fetched
   from the app-server.
@@ -135,7 +135,7 @@ Rules:
 - `EventMsg::TurnComplete` and `EventMsg::TurnAborted` are forwarded as normal events, but the UI
   does **not** use them as exit conditions.
 - The control plane emits `EventMsg::PotterRoundFinished { outcome }` exactly once to signal that
-  the current round is finished and the UI should exit the render-only runner.
+  the current round is finished and the UI should exit the round renderer.
 - `EventMsg::Error` is treated as terminal **unless** it is classified as a retryable stream/network
   error via `codex_protocol::potter_stream_recovery::is_retryable_stream_error(...)`. When a
   retryable error happens mid-round, the bridge suppresses the raw error event, emits

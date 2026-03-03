@@ -14,8 +14,8 @@ text inserted into `ChatComposer`.
 - **Upstream-derived**: the `codex-file-search` crate and the TUI integration (`tui/src/file_search.rs`
   and the popup widgets) are forked from the upstream Codex Rust workspace (`codex-rs/`) with
   minimal changes. Prefer upstream parity when modifying behavior.
-- **Potter-specific**: `codex-potter` uses the feature in a reduced, render-only UI; it does not add
-  new file-search semantics.
+- **Potter-specific**: `codex-potter` uses the feature in a reduced TUI (prompt screen + round
+  renderer); it does not add new file-search semantics.
 
 ## The `codex-file-search` crate (`file-search/`)
 

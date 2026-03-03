@@ -26,9 +26,9 @@ trait ResumeUi {
     fn clear(&mut self) -> anyhow::Result<()>;
     fn set_project_started_at(&mut self, started_at: Instant);
 
-    fn render_turn<'a>(
+    fn render_round<'a>(
         &'a mut self,
-        params: codex_tui::RenderTurnParams,
+        params: codex_tui::RenderRoundParams,
     ) -> UiFuture<'a, codex_tui::AppExitInfo>;
 
     fn prompt_action_picker<'a>(&'a mut self, actions: Vec<String>) -> UiFuture<'a, Option<usize>>;
@@ -43,11 +43,11 @@ impl ResumeUi for codex_tui::CodexPotterTui {
         codex_tui::CodexPotterTui::set_project_started_at(self, started_at);
     }
 
-    fn render_turn<'a>(
+    fn render_round<'a>(
         &'a mut self,
-        params: codex_tui::RenderTurnParams,
+        params: codex_tui::RenderRoundParams,
     ) -> UiFuture<'a, codex_tui::AppExitInfo> {
-        Box::pin(codex_tui::CodexPotterTui::render_turn(self, params))
+        Box::pin(codex_tui::CodexPotterTui::render_round(self, params))
     }
 
     fn prompt_action_picker<'a>(&'a mut self, actions: Vec<String>) -> UiFuture<'a, Option<usize>> {
@@ -283,7 +283,7 @@ where
         let (_fatal_exit_tx, fatal_exit_rx) = unbounded_channel::<String>();
 
         let exit_info = ui
-            .render_turn(codex_tui::RenderTurnParams {
+            .render_round(codex_tui::RenderRoundParams {
                 prompt: String::new(),
                 pad_before_first_cell: idx != 0,
                 prompt_footer: prompt_footer.clone(),
@@ -324,7 +324,7 @@ where
         let (_fatal_exit_tx, fatal_exit_rx) = unbounded_channel::<String>();
 
         let exit_info = ui
-            .render_turn(codex_tui::RenderTurnParams {
+            .render_round(codex_tui::RenderRoundParams {
                 prompt: String::new(),
                 pad_before_first_cell: has_completed_rounds,
                 prompt_footer: prompt_footer.clone(),
@@ -900,7 +900,7 @@ fn read_upstream_rollout_event_msgs(rollout_path: &Path) -> anyhow::Result<Vec<E
 
 /// Build the minimal replay events needed to show an unfinished round boundary before prompting.
 ///
-/// Note: the trailing `PotterRoundFinished` is synthesized so the render-only runner exits cleanly
+/// Note: the trailing `PotterRoundFinished` is synthesized so the round renderer exits cleanly
 /// (otherwise EOF would be treated as a fatal "Backend disconnected").
 fn build_unfinished_round_pre_action_events(
     project: &ResolvedProjectPaths,
@@ -1108,7 +1108,7 @@ mod tests {
     enum MockUiOp {
         Clear,
         SetProjectStartedAt(Instant),
-        RenderTurn,
+        RenderRound,
         PromptActionPicker(Vec<String>),
     }
 
@@ -1127,11 +1127,11 @@ mod tests {
             self.ops.push(MockUiOp::SetProjectStartedAt(started_at));
         }
 
-        fn render_turn<'a>(
+        fn render_round<'a>(
             &'a mut self,
-            _params: codex_tui::RenderTurnParams,
+            _params: codex_tui::RenderRoundParams,
         ) -> UiFuture<'a, codex_tui::AppExitInfo> {
-            self.ops.push(MockUiOp::RenderTurn);
+            self.ops.push(MockUiOp::RenderRound);
             Box::pin(async {
                 Ok(codex_tui::AppExitInfo {
                     token_usage: codex_protocol::protocol::TokenUsage::default(),
@@ -1295,7 +1295,7 @@ mod tests {
             vec![
                 MockUiOp::Clear,
                 MockUiOp::SetProjectStartedAt(replay_started_at),
-                MockUiOp::RenderTurn,
+                MockUiOp::RenderRound,
                 MockUiOp::PromptActionPicker(vec![String::from("Continue & iterate 1 more round")]),
                 MockUiOp::SetProjectStartedAt(continue_started_at),
             ]

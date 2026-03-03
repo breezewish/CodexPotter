@@ -140,8 +140,8 @@ pub enum EventMsg {
     ///
     /// CodexPotter can issue multiple upstream `turn/start` calls within the same round when
     /// recovering from transient stream/network failures. The control plane emits this marker
-    /// exactly once to signal that the round is finished and the UI should exit the render-only
-    /// runner with the provided outcome.
+    /// exactly once to signal that the round is finished and the UI should exit the round renderer
+    /// with the provided outcome.
     PotterRoundFinished {
         outcome: PotterRoundOutcome,
     },

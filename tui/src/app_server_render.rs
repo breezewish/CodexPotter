@@ -50,7 +50,7 @@ use crate::streaming::controller::StreamController;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
 
-fn render_render_only_viewport(
+fn render_runner_viewport(
     area: ratatui::layout::Rect,
     buf: &mut ratatui::buffer::Buffer,
     bottom_pane: &BottomPane,
@@ -249,19 +249,20 @@ fn should_pad_prompt_after_history_insert(lines: &[Line<'_>]) -> bool {
         .all(|span| span.content.as_ref().trim().is_empty())
 }
 
-/// Controls how a single render-only turn is rendered into the terminal transcript.
+/// Controls how a single Potter round is rendered into the terminal transcript.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RenderOnlyTurnOptions {
+pub struct RoundRenderOptions {
     /// When true, renders the user prompt into the transcript before sending it to the backend.
     pub render_user_prompt: bool,
 
-    /// When true, inserts a blank line before the first emitted history cell in this single-turn
-    /// session. This is useful when multiple turns are rendered into the same terminal transcript
-    /// (multi-round runners) while suppressing the per-turn user prompt rendering.
+    /// When true, inserts a blank line before the first emitted history cell in this round.
+    ///
+    /// This is useful when multiple rounds are rendered into the same terminal transcript while
+    /// suppressing per-round user prompt rendering.
     pub pad_before_first_cell: bool,
 }
 
-impl Default for RenderOnlyTurnOptions {
+impl Default for RoundRenderOptions {
     fn default() -> Self {
         Self {
             render_user_prompt: true,
@@ -270,26 +271,26 @@ impl Default for RenderOnlyTurnOptions {
     }
 }
 
-/// Channels required to drive a single render-only turn.
-pub struct RenderOnlyBackendChannels {
+/// Channels required to drive a single Potter round render loop.
+pub struct RoundBackendChannels {
     /// Sends ops from the UI to the backend.
     pub codex_op_tx: UnboundedSender<Op>,
     /// Receives events streamed from the backend.
     pub codex_event_rx: UnboundedReceiver<Event>,
-    /// Receives fatal errors from the control plane that should abort the turn immediately.
+    /// Receives fatal errors from the control plane that should abort the round immediately.
     pub fatal_exit_rx: UnboundedReceiver<String>,
 }
 
-/// Mutable UI state that must persist across render-only turns.
-pub struct RenderOnlyTurnUiState<'a> {
+/// Mutable UI state that must persist across rounds.
+pub struct RoundUiState<'a> {
     /// Prompts queued while a task is running (collected from the bottom composer).
     pub queued_user_messages: &'a mut VecDeque<String>,
     /// Draft composer contents to restore when returning to a prompt screen.
     pub composer_draft: &'a mut Option<crate::bottom_pane::ChatComposerDraft>,
 }
 
-/// Context that must persist across turns within a CodexPotter project/session.
-pub struct RenderOnlyTurnContext {
+/// Context that must persist across rounds within a CodexPotter project.
+pub struct ProjectRenderContext {
     pub project_started_at: Instant,
     pub prompt_footer: PromptFooterContext,
 }
@@ -304,26 +305,26 @@ fn text_user_input_op(text: String) -> Op {
     }
 }
 
-/// Run a single turn in render-only mode and collect any queued user messages typed mid-turn.
+/// Run a single Potter round render loop and collect any queued user messages typed mid-round.
 ///
 /// This function consumes backend events, updates the transcript, and drives the bottom composer.
-/// Any prompts queued while the turn is running are appended to `queued_user_messages`. The
+/// Any prompts queued while the round is running are appended to `queued_user_messages`. The
 /// current composer draft is written back to `composer_draft` so it can be restored by subsequent
 /// prompt screens.
-pub async fn run_render_only_with_tui_options_and_queue(
+pub async fn run_round_with_tui_options_and_queue(
     tui: &mut Tui,
     prompt: String,
-    options: RenderOnlyTurnOptions,
-    context: RenderOnlyTurnContext,
-    backend: RenderOnlyBackendChannels,
+    options: RoundRenderOptions,
+    context: ProjectRenderContext,
+    backend: RoundBackendChannels,
     startup_warnings: Vec<String>,
-    state: RenderOnlyTurnUiState<'_>,
+    state: RoundUiState<'_>,
 ) -> anyhow::Result<AppExitInfo> {
-    let RenderOnlyTurnContext {
+    let ProjectRenderContext {
         project_started_at,
         prompt_footer,
     } = context;
-    let RenderOnlyBackendChannels {
+    let RoundBackendChannels {
         codex_op_tx,
         mut codex_event_rx,
         mut fatal_exit_rx,
@@ -342,7 +343,7 @@ pub async fn run_render_only_with_tui_options_and_queue(
     let file_search = FileSearchManager::new(file_search_dir, app_event_tx.clone());
     let prompt_history = crate::prompt_history_store::PromptHistoryStore::new();
 
-    let driver = RenderOnlyProcessor::new(app_event_tx.clone());
+    let driver = AppServerEventProcessor::new(app_event_tx.clone());
     if options.render_user_prompt {
         driver.emit_user_prompt(prompt.clone());
     }
@@ -387,7 +388,7 @@ pub async fn run_render_only_with_tui_options_and_queue(
     result
 }
 
-struct RenderOnlyProcessor {
+struct AppServerEventProcessor {
     app_event_tx: AppEventSender,
     stream: StreamController,
     plan_stream: Option<PlanStreamController>,
@@ -420,7 +421,7 @@ struct PendingPotterProjectSucceeded {
     git_commit_end: String,
 }
 
-impl RenderOnlyProcessor {
+impl AppServerEventProcessor {
     fn new(app_event_tx: AppEventSender) -> Self {
         Self {
             app_event_tx,
@@ -926,7 +927,7 @@ enum PromptScreenAction {
 struct RenderAppState {
     prompt_action: Option<PromptScreenAction>,
     should_pad_prompt_viewport: bool,
-    processor: RenderOnlyProcessor,
+    processor: AppServerEventProcessor,
     app_event_tx: AppEventSender,
     codex_op_tx: Option<UnboundedSender<Op>>,
     bottom_pane: BottomPane,
@@ -944,7 +945,7 @@ struct RenderAppState {
 
 impl RenderAppState {
     fn new(
-        processor: RenderOnlyProcessor,
+        processor: AppServerEventProcessor,
         app_event_tx: AppEventSender,
         codex_op_tx: Option<UnboundedSender<Op>>,
         bottom_pane: BottomPane,
@@ -979,7 +980,7 @@ impl RenderAppState {
         file_search: FileSearchManager,
         should_pad_prompt_viewport: bool,
     ) -> Self {
-        let processor = RenderOnlyProcessor::new(app_event_tx.clone());
+        let processor = AppServerEventProcessor::new(app_event_tx.clone());
         let mut app = Self::new(
             processor,
             app_event_tx,
@@ -1391,12 +1392,7 @@ impl RenderAppState {
         tui.draw(viewport_height, |frame| {
             let area = frame.area();
             ratatui::widgets::Clear.render(area, frame.buffer_mut());
-            render_render_only_viewport(
-                area,
-                frame.buffer_mut(),
-                &self.bottom_pane,
-                transient_lines,
-            );
+            render_runner_viewport(area, frame.buffer_mut(), &self.bottom_pane, transient_lines);
 
             let pane_height = self
                 .bottom_pane
@@ -1873,7 +1869,7 @@ mod tests {
     }
 
     fn drive_stream_to_idle(
-        proc: &mut RenderOnlyProcessor,
+        proc: &mut AppServerEventProcessor,
         rx: &mut UnboundedReceiver<AppEvent>,
         terminal: &mut crate::custom_terminal::Terminal<VT100Backend>,
         width: u16,
@@ -1887,19 +1883,19 @@ mod tests {
 
     fn make_render_only_processor(
         prompt: &str,
-    ) -> (RenderOnlyProcessor, UnboundedReceiver<AppEvent>) {
+    ) -> (AppServerEventProcessor, UnboundedReceiver<AppEvent>) {
         let (tx_raw, rx) = unbounded_channel::<AppEvent>();
         let app_event_tx = AppEventSender::new(tx_raw);
-        let proc = RenderOnlyProcessor::new(app_event_tx);
+        let proc = AppServerEventProcessor::new(app_event_tx);
         proc.emit_user_prompt(prompt.to_string());
         (proc, rx)
     }
 
     fn make_render_only_processor_without_prompt()
-    -> (RenderOnlyProcessor, UnboundedReceiver<AppEvent>) {
+    -> (AppServerEventProcessor, UnboundedReceiver<AppEvent>) {
         let (tx_raw, rx) = unbounded_channel::<AppEvent>();
         let app_event_tx = AppEventSender::new(tx_raw);
-        (RenderOnlyProcessor::new(app_event_tx), rx)
+        (AppServerEventProcessor::new(app_event_tx), rx)
     }
 
     #[tokio::test]
@@ -1967,7 +1963,7 @@ mod tests {
         let (tx_raw, mut rx_app) = unbounded_channel::<AppEvent>();
         let app_event_tx = AppEventSender::new(tx_raw);
 
-        let processor = RenderOnlyProcessor::new(app_event_tx.clone());
+        let processor = AppServerEventProcessor::new(app_event_tx.clone());
         let (op_tx, mut op_rx) = unbounded_channel::<Op>();
         let mut bottom_pane = BottomPane::new(BottomPaneParams {
             frame_requester: crate::tui::FrameRequester::test_dummy(),
@@ -2089,7 +2085,7 @@ mod tests {
         let (tx_raw, mut rx_app) = unbounded_channel::<AppEvent>();
         let app_event_tx = AppEventSender::new(tx_raw);
 
-        let processor = RenderOnlyProcessor::new(app_event_tx.clone());
+        let processor = AppServerEventProcessor::new(app_event_tx.clone());
         let (op_tx, mut op_rx) = unbounded_channel::<Op>();
         let mut bottom_pane = BottomPane::new(BottomPaneParams {
             frame_requester: crate::tui::FrameRequester::test_dummy(),
@@ -2176,7 +2172,7 @@ mod tests {
         let (tx_raw, mut rx_app) = unbounded_channel::<AppEvent>();
         let app_event_tx = AppEventSender::new(tx_raw);
 
-        let processor = RenderOnlyProcessor::new(app_event_tx.clone());
+        let processor = AppServerEventProcessor::new(app_event_tx.clone());
         let (op_tx, mut op_rx) = unbounded_channel::<Op>();
         let mut bottom_pane = BottomPane::new(BottomPaneParams {
             frame_requester: crate::tui::FrameRequester::test_dummy(),
@@ -2281,7 +2277,7 @@ mod tests {
         let (tx_raw, mut rx_app) = unbounded_channel::<AppEvent>();
         let app_event_tx = AppEventSender::new(tx_raw);
 
-        let processor = RenderOnlyProcessor::new(app_event_tx.clone());
+        let processor = AppServerEventProcessor::new(app_event_tx.clone());
         let (op_tx, mut op_rx) = unbounded_channel::<Op>();
         let mut bottom_pane = BottomPane::new(BottomPaneParams {
             frame_requester: crate::tui::FrameRequester::test_dummy(),
@@ -2337,7 +2333,7 @@ mod tests {
         let (tx_raw, mut rx_app) = unbounded_channel::<AppEvent>();
         let app_event_tx = AppEventSender::new(tx_raw);
 
-        let processor = RenderOnlyProcessor::new(app_event_tx.clone());
+        let processor = AppServerEventProcessor::new(app_event_tx.clone());
         let (op_tx, mut op_rx) = unbounded_channel::<Op>();
         let mut bottom_pane = BottomPane::new(BottomPaneParams {
             frame_requester: crate::tui::FrameRequester::test_dummy(),
@@ -2424,7 +2420,7 @@ mod tests {
         let (tx_raw, _rx_app) = unbounded_channel::<AppEvent>();
         let app_event_tx = AppEventSender::new(tx_raw);
 
-        let processor = RenderOnlyProcessor::new(app_event_tx.clone());
+        let processor = AppServerEventProcessor::new(app_event_tx.clone());
         let (op_tx, _op_rx) = unbounded_channel::<Op>();
         let mut bottom_pane = BottomPane::new(BottomPaneParams {
             frame_requester: crate::tui::FrameRequester::test_dummy(),
@@ -2481,7 +2477,7 @@ mod tests {
         let (tx_raw, _rx_app) = unbounded_channel::<AppEvent>();
         let app_event_tx = AppEventSender::new(tx_raw);
 
-        let processor = RenderOnlyProcessor::new(app_event_tx.clone());
+        let processor = AppServerEventProcessor::new(app_event_tx.clone());
         let (op_tx, _op_rx) = unbounded_channel::<Op>();
         let bottom_pane = BottomPane::new(BottomPaneParams {
             frame_requester: crate::tui::FrameRequester::test_dummy(),
@@ -2524,7 +2520,7 @@ mod tests {
         let (tx_raw, _rx_app) = unbounded_channel::<AppEvent>();
         let app_event_tx = AppEventSender::new(tx_raw);
 
-        let processor = RenderOnlyProcessor::new(app_event_tx.clone());
+        let processor = AppServerEventProcessor::new(app_event_tx.clone());
         let (op_tx, _op_rx) = unbounded_channel::<Op>();
         let bottom_pane = BottomPane::new(BottomPaneParams {
             frame_requester: crate::tui::FrameRequester::test_dummy(),
@@ -2574,7 +2570,7 @@ mod tests {
         let (tx_raw, _rx_app) = unbounded_channel::<AppEvent>();
         let app_event_tx = AppEventSender::new(tx_raw);
 
-        let processor = RenderOnlyProcessor::new(app_event_tx.clone());
+        let processor = AppServerEventProcessor::new(app_event_tx.clone());
         let (op_tx, _op_rx) = unbounded_channel::<Op>();
         let bottom_pane = BottomPane::new(BottomPaneParams {
             frame_requester: crate::tui::FrameRequester::test_dummy(),
@@ -2621,7 +2617,7 @@ mod tests {
         let (tx_raw, mut rx_app) = unbounded_channel::<AppEvent>();
         let app_event_tx = AppEventSender::new(tx_raw);
 
-        let processor = RenderOnlyProcessor::new(app_event_tx.clone());
+        let processor = AppServerEventProcessor::new(app_event_tx.clone());
         let (op_tx, _op_rx) = unbounded_channel::<Op>();
         let bottom_pane = BottomPane::new(BottomPaneParams {
             frame_requester: crate::tui::FrameRequester::test_dummy(),
@@ -2681,7 +2677,7 @@ mod tests {
         let (tx_raw, mut rx_app) = unbounded_channel::<AppEvent>();
         let app_event_tx = AppEventSender::new(tx_raw);
 
-        let processor = RenderOnlyProcessor::new(app_event_tx.clone());
+        let processor = AppServerEventProcessor::new(app_event_tx.clone());
         let (op_tx, _op_rx) = unbounded_channel::<Op>();
         let bottom_pane = BottomPane::new(BottomPaneParams {
             frame_requester: crate::tui::FrameRequester::test_dummy(),
@@ -2915,7 +2911,7 @@ mod tests {
         let (tx_raw, _rx_app) = unbounded_channel::<AppEvent>();
         let app_event_tx = AppEventSender::new(tx_raw);
 
-        let processor = RenderOnlyProcessor::new(app_event_tx.clone());
+        let processor = AppServerEventProcessor::new(app_event_tx.clone());
         let (op_tx, _op_rx) = unbounded_channel::<Op>();
         let bottom_pane = BottomPane::new(BottomPaneParams {
             frame_requester: crate::tui::FrameRequester::test_dummy(),
@@ -2971,7 +2967,7 @@ mod tests {
 
                 ratatui::widgets::Paragraph::new(ratatui::text::Text::from(history_lines))
                     .render(history_area, frame.buffer_mut());
-                render_render_only_viewport(
+                render_runner_viewport(
                     viewport_area,
                     frame.buffer_mut(),
                     &app.bottom_pane,
@@ -2993,7 +2989,7 @@ mod tests {
         let (tx_raw, _rx_app) = unbounded_channel::<AppEvent>();
         let app_event_tx = AppEventSender::new(tx_raw);
 
-        let processor = RenderOnlyProcessor::new(app_event_tx.clone());
+        let processor = AppServerEventProcessor::new(app_event_tx.clone());
         let (op_tx, _op_rx) = unbounded_channel::<Op>();
         let mut bottom_pane = BottomPane::new(BottomPaneParams {
             frame_requester: crate::tui::FrameRequester::test_dummy(),
@@ -3054,7 +3050,7 @@ mod tests {
 
                 ratatui::widgets::Paragraph::new(ratatui::text::Text::from(history_lines))
                     .render(history_area, frame.buffer_mut());
-                render_render_only_viewport(
+                render_runner_viewport(
                     viewport_area,
                     frame.buffer_mut(),
                     &app.bottom_pane,
@@ -3076,7 +3072,7 @@ mod tests {
         let (tx_raw, _rx_app) = unbounded_channel::<AppEvent>();
         let app_event_tx = AppEventSender::new(tx_raw);
 
-        let processor = RenderOnlyProcessor::new(app_event_tx.clone());
+        let processor = AppServerEventProcessor::new(app_event_tx.clone());
         let (op_tx, _op_rx) = unbounded_channel::<Op>();
         let mut bottom_pane = BottomPane::new(BottomPaneParams {
             frame_requester: crate::tui::FrameRequester::test_dummy(),
@@ -3150,7 +3146,7 @@ mod tests {
 
                 ratatui::widgets::Paragraph::new(ratatui::text::Text::from(history_lines))
                     .render(history_area, frame.buffer_mut());
-                render_render_only_viewport(
+                render_runner_viewport(
                     viewport_area,
                     frame.buffer_mut(),
                     &app.bottom_pane,
@@ -3212,7 +3208,7 @@ mod tests {
 
                 ratatui::widgets::Paragraph::new(ratatui::text::Text::from(history_lines))
                     .render(history_area, frame.buffer_mut());
-                render_render_only_viewport(
+                render_runner_viewport(
                     viewport_area,
                     frame.buffer_mut(),
                     &bottom_pane,
@@ -3782,7 +3778,7 @@ mod tests {
         let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
         let app_event_tx = AppEventSender::new(tx_raw);
 
-        let mut proc = RenderOnlyProcessor::new(app_event_tx);
+        let mut proc = AppServerEventProcessor::new(app_event_tx);
 
         let base = ExecCommandEndEvent {
             call_id: "unused".into(),
@@ -3911,7 +3907,7 @@ mod tests {
 
                 ratatui::widgets::Paragraph::new(ratatui::text::Text::from(prompt_lines))
                     .render(prompt_area, frame.buffer_mut());
-                render_render_only_viewport(
+                render_runner_viewport(
                     viewport_area,
                     frame.buffer_mut(),
                     &bottom_pane,
@@ -3933,7 +3929,7 @@ mod tests {
         let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
         let app_event_tx = AppEventSender::new(tx_raw);
 
-        let mut proc = RenderOnlyProcessor::new(app_event_tx);
+        let mut proc = AppServerEventProcessor::new(app_event_tx);
 
         let base = ExecCommandEndEvent {
             call_id: "unused".into(),
@@ -4045,7 +4041,7 @@ mod tests {
 
                 ratatui::widgets::Paragraph::new(ratatui::text::Text::from(prompt_lines))
                     .render(prompt_area, frame.buffer_mut());
-                render_render_only_viewport(
+                render_runner_viewport(
                     viewport_area,
                     frame.buffer_mut(),
                     &bottom_pane,
@@ -4078,7 +4074,7 @@ mod tests {
         let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
         let app_event_tx = AppEventSender::new(tx_raw);
 
-        let mut proc = RenderOnlyProcessor::new(app_event_tx.clone());
+        let mut proc = AppServerEventProcessor::new(app_event_tx.clone());
         proc.handle_codex_event(Event {
             id: "session-start".into(),
             msg: EventMsg::PotterProjectStarted {
@@ -4208,7 +4204,7 @@ mod tests {
         let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
         let app_event_tx = AppEventSender::new(tx_raw);
 
-        let mut proc = RenderOnlyProcessor::new(app_event_tx);
+        let mut proc = AppServerEventProcessor::new(app_event_tx);
 
         let base = ExecCommandEndEvent {
             call_id: "unused".into(),

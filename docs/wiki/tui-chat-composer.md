@@ -3,7 +3,7 @@
 This document describes the behavior of the `ChatComposer` bottom-pane input state machine
 (`tui/src/bottom_pane/chat_composer.rs`) as used by `codex-potter`.
 
-For the broader render-only TUI design (output folding, token indicator, status header updates),
+For the broader round-renderer TUI design (output folding, token indicator, status header updates),
 see `tui-design.md`. For the wiki index, see `README.md`.
 
 For `@` file search (session orchestration + popup insertion), see `file-search.md`.
@@ -11,7 +11,7 @@ For `@` file search (session orchestration + popup insertion), see `file-search.
 ## Ownership
 
 `ChatComposer` is upstream-derived (forked from the upstream Codex TUI) but used in a reduced
-bottom pane tailored for `codex-potter` (prompt screen + render-only runner). When changing
+bottom pane tailored for `codex-potter` (prompt screen + round renderer). When changing
 behavior, prefer staying close to upstream semantics unless a potter-specific constraint requires a
 divergence.
 

@@ -331,7 +331,7 @@ async fn run_potter_round_inner(
         crate::project::resolve_git_branch(&context.workdir),
     );
     let exit_info = ui
-        .render_turn(codex_tui::RenderTurnParams {
+        .render_round(codex_tui::RenderRoundParams {
             prompt,
             pad_before_first_cell,
             prompt_footer,

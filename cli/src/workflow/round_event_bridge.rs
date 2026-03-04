@@ -65,7 +65,7 @@ impl PotterRoundEventBridge {
             &self.workdir,
             &self.progress_file_rel,
         )
-        .unwrap_or(false)
+        .context("check progress file finite_incantatem")?
         {
             let git_commit_end = crate::workflow::project::resolve_git_commit(&self.workdir);
             crate::workflow::rollout::append_line(
@@ -288,5 +288,44 @@ finite_incantatem: {finite}
                 outcome: PotterRoundOutcome::Completed
             }
         ));
+    }
+
+    #[test]
+    fn observe_backend_event_errors_when_progress_file_missing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let workdir = dir.path();
+
+        let potter_rollout_path = workdir.join("potter-rollout.jsonl");
+        let progress_file_rel = PathBuf::from(".codexpotter/projects/2026/03/04/1/MAIN.md");
+
+        let mut bridge = PotterRoundEventBridge::new(PotterRoundEventBridgeConfig {
+            record_round_configured: false,
+            workdir: workdir.to_path_buf(),
+            progress_file_rel: progress_file_rel.clone(),
+            user_prompt_file: progress_file_rel,
+            git_commit_start: "start".to_string(),
+            potter_rollout_path: potter_rollout_path.clone(),
+            project_started_at: Instant::now(),
+            project_succeeded_rounds: 1,
+        });
+
+        let finished = Event {
+            id: "event_2".to_string(),
+            msg: EventMsg::PotterRoundFinished {
+                outcome: PotterRoundOutcome::Completed,
+            },
+        };
+
+        let err = bridge
+            .observe_backend_event(&finished)
+            .expect_err("expected error");
+        assert!(
+            err.to_string().contains("finite_incantatem"),
+            "error should mention finite_incantatem: {err:#}"
+        );
+        assert!(
+            !potter_rollout_path.exists(),
+            "should not write rollout on error"
+        );
     }
 }

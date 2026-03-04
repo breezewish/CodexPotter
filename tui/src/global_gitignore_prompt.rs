@@ -60,8 +60,7 @@ pub async fn run_global_gitignore_prompt(
 
     // Ensure the crossterm EventStream is dropped before restoring terminal modes. Otherwise it may
     // keep reading from stdin and steal cursor-position query responses from the next TUI init.
-    tui.pause_events();
-    tui::flush_terminal_input_buffer();
+    tui.pause_events_and_flush_input();
 
     // Always attempt to restore the terminal, even if the prompt loop fails.
     let _ = tui::restore();

@@ -4,6 +4,7 @@ use crossterm::event::KeyModifiers;
 
 use crate::bottom_pane::ChatComposer;
 use crate::external_editor;
+use crate::tui::RestoreMode;
 use crate::tui::Tui;
 
 pub const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
@@ -26,7 +27,9 @@ pub async fn run_external_editor(
 
     let seed = composer.current_text_with_pending();
     let editor_result = tui
-        .with_restored(|| async { external_editor::run_editor(&seed, &editor_cmd).await })
+        .with_restored(RestoreMode::KeepRaw, || async {
+            external_editor::run_editor(&seed, &editor_cmd).await
+        })
         .await;
 
     match editor_result {

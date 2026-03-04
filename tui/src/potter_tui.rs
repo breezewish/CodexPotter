@@ -62,9 +62,7 @@ impl CodexPotterTui {
     }
 
     fn reset_event_stream_after_prompt(&mut self) {
-        self.tui.pause_events();
-        tui::flush_terminal_input_buffer();
-        self.tui.resume_events();
+        self.tui.reset_event_stream();
     }
 
     /// Enable/disable update checks and update prompts on startup.

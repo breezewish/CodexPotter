@@ -149,10 +149,26 @@ pub fn restore_keep_raw() -> Result<()> {
     restore_common(should_disable_raw_mode)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RestoreMode {
+    #[allow(dead_code)]
+    Full, // Fully restore the terminal (disables raw mode).
+    KeepRaw, // Restore the terminal but keep raw mode enabled.
+}
+
+impl RestoreMode {
+    fn restore(self) -> Result<()> {
+        match self {
+            RestoreMode::Full => restore(),
+            RestoreMode::KeepRaw => restore_keep_raw(),
+        }
+    }
+}
+
 /// Flush the underlying stdin buffer to clear any input that may be buffered at the terminal level.
 /// For example, clears any user input that occurred while the crossterm EventStream was dropped.
 #[cfg(unix)]
-pub fn flush_terminal_input_buffer() {
+fn flush_terminal_input_buffer() {
     // Safety: flushing the stdin queue is safe and does not move ownership.
     let result = unsafe { libc::tcflush(libc::STDIN_FILENO, libc::TCIFLUSH) };
     if result != 0 {
@@ -164,7 +180,7 @@ pub fn flush_terminal_input_buffer() {
 /// Flush the underlying stdin buffer to clear any input that may be buffered at the terminal level.
 /// For example, clears any user input that occurred while the crossterm EventStream was dropped.
 #[cfg(windows)]
-pub fn flush_terminal_input_buffer() {
+fn flush_terminal_input_buffer() {
     use windows_sys::Win32::Foundation::GetLastError;
     use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
     use windows_sys::Win32::System::Console::FlushConsoleInputBuffer;
@@ -186,7 +202,7 @@ pub fn flush_terminal_input_buffer() {
 }
 
 #[cfg(not(any(unix, windows)))]
-pub fn flush_terminal_input_buffer() {}
+fn flush_terminal_input_buffer() {}
 
 /// Initialize the terminal (inline viewport; history stays in normal scrollback)
 pub fn init() -> Result<Terminal> {
@@ -197,6 +213,8 @@ pub fn init() -> Result<Terminal> {
         return Err(std::io::Error::other("stdout is not a terminal"));
     }
     set_modes()?;
+
+    flush_terminal_input_buffer();
 
     set_panic_hook();
 
@@ -283,18 +301,28 @@ impl Tui {
         self.event_broker.pause_events();
     }
 
+    pub fn pause_events_and_flush_input(&mut self) {
+        self.pause_events();
+        flush_terminal_input_buffer();
+    }
+
     // Resume crossterm EventStream to resume stdin polling.
     // Inverse of `pause_events`.
     pub fn resume_events(&mut self) {
         self.event_broker.resume_events();
     }
 
+    pub fn reset_event_stream(&mut self) {
+        self.pause_events_and_flush_input();
+        self.resume_events();
+    }
+
     /// Temporarily restore terminal state to run an external interactive program `f`.
     ///
     /// This pauses crossterm's stdin polling by dropping the underlying event stream, restores
-    /// terminal modes (keeping raw mode enabled), then re-applies Codex TUI modes and flushes
-    /// pending stdin input before resuming events.
-    pub async fn with_restored<R, F, Fut>(&mut self, f: F) -> R
+    /// terminal modes (optionally keeping raw mode enabled), then re-applies Codex TUI modes and
+    /// flushes pending stdin input before resuming events.
+    pub async fn with_restored<R, F, Fut>(&mut self, mode: RestoreMode, f: F) -> R
     where
         F: FnOnce() -> Fut,
         Fut: Future<Output = R>,
@@ -308,7 +336,7 @@ impl Tui {
             let _ = self.leave_alt_screen();
         }
 
-        if let Err(err) = restore_keep_raw() {
+        if let Err(err) = mode.restore() {
             tracing::warn!("failed to restore terminal modes before external program: {err}");
         }
 

@@ -1,3 +1,15 @@
+//! Global gitignore detection and CodexPotter ignore helpers.
+//!
+//! CodexPotter writes project state under `.codexpotter/`, which is intentionally untracked and
+//! should not be committed. This module:
+//!
+//! - Resolves the user's global gitignore path (`core.excludesfile` when configured, otherwise
+//!   XDG/`~/.config/git/ignore`).
+//! - Detects whether the current ignore rules already ignore `.codexpotter/`.
+//! - Appends a `.codexpotter/` entry atomically when the user opts in.
+//!
+//! The TUI uses this information to show a startup hint and optionally apply the change.
+
 use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;

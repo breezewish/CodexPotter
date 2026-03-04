@@ -1,3 +1,14 @@
+//! Startup helpers for locating the upstream `codex` CLI binary.
+//!
+//! CodexPotter spawns upstream processes (for example `codex app-server`) during interactive
+//! workflows. This module resolves the command used for spawning:
+//!
+//! - When the user passes `--codex-bin` that looks like a path, validate it is an executable file.
+//! - Otherwise, resolve it via `$PATH` (e.g. `codex`).
+//!
+//! It also provides user-facing error messages in both plain text (`Display`) and ANSI-rendered
+//! form (used by the CLI/TUI). Snapshot tests cover the most important error formatting.
+
 use std::fmt;
 use std::path::Path;
 use std::path::PathBuf;

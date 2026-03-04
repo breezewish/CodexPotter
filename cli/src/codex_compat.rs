@@ -1,3 +1,14 @@
+//! Creates a Codex-compatible home directory for upstream processes.
+//!
+//! CodexPotter needs to spawn the upstream `codex` backend while keeping its own state under
+//! `~/.codexpotter/`. The upstream backend expects a `CODEX_HOME` directory containing config,
+//! auth, skills, and rules. To avoid mutating the user's real Codex home, we create a
+//! `~/.codexpotter/codex-compat/` directory that symlinks to the corresponding files/dirs in the
+//! real `CODEX_HOME` (or `~/.codex` when unset).
+//!
+//! The resulting path is passed to upstream via `CODEX_HOME` so existing Codex configuration is
+//! honored while CodexPotter continues to own its own on-disk artifacts.
+
 use std::path::Path;
 use std::path::PathBuf;
 

@@ -1069,21 +1069,40 @@ async fn run_resumed_project(
         && matches!(resume_policy, ResumePolicy::ContinueUnfinishedRound)
     {
         let total_rounds = unfinished.round_total;
-        let remaining =
-            remaining_rounds_including_current(unfinished.round_current, unfinished.round_total)?;
-        let remaining_after_continue = remaining.saturating_sub(1);
 
         let rollout_path =
             resolve_rollout_path_for_replay(&resumed.resolved, &unfinished.rollout_path);
-        let mut replay_event_msgs = Vec::new();
-        if let Some(cfg) =
-            synthesize_session_configured_event(unfinished.thread_id, rollout_path.clone())?
-        {
-            replay_event_msgs.push(EventMsg::SessionConfigured(cfg));
-        }
-        let mut rollout_events = read_upstream_rollout_event_msgs(&rollout_path)
-            .with_context(|| format!("replay rollout {}", rollout_path.display()))?;
-        replay_event_msgs.append(&mut rollout_events);
+        let (remaining_after_continue, replay_event_msgs) = match (|| {
+            let remaining = remaining_rounds_including_current(
+                unfinished.round_current,
+                unfinished.round_total,
+            )?;
+            let remaining_after_continue = remaining.saturating_sub(1);
+
+            let mut replay_event_msgs = Vec::new();
+            if let Some(cfg) =
+                synthesize_session_configured_event(unfinished.thread_id, rollout_path.clone())?
+            {
+                replay_event_msgs.push(EventMsg::SessionConfigured(cfg));
+            }
+            let mut rollout_events = read_upstream_rollout_event_msgs(&rollout_path)
+                .with_context(|| format!("replay rollout {}", rollout_path.display()))?;
+            replay_event_msgs.append(&mut rollout_events);
+            Ok::<(u32, Vec<EventMsg>), anyhow::Error>((remaining_after_continue, replay_event_msgs))
+        })() {
+            Ok(values) => values,
+            Err(err) => {
+                let message = format!("{err:#}");
+                ui.emit_marker(EventMsg::Error(ErrorEvent {
+                    message: message.clone(),
+                    codex_error_info: None,
+                }));
+                ui.emit_marker(EventMsg::PotterProjectCompleted {
+                    outcome: PotterProjectOutcome::Fatal { message },
+                });
+                return Ok(());
+            }
+        };
 
         let mut rounds_run = 0u32;
         let mut outcome = PotterProjectOutcome::BudgetExhausted;
@@ -1461,6 +1480,7 @@ mod tests {
     use super::*;
 
     use pretty_assertions::assert_eq;
+    use tokio::sync::mpsc::UnboundedReceiver;
 
     #[tokio::test]
     async fn start_rounds_without_resumed_project_returns_jsonrpc_error() {
@@ -1512,5 +1532,110 @@ mod tests {
             "unexpected error message: {:?}",
             error.error.message
         );
+    }
+
+    #[tokio::test]
+    async fn resumed_project_missing_rollout_emits_project_completed_marker() {
+        let temp = tempfile::tempdir().expect("tempdir");
+
+        let config = PotterAppServerConfig {
+            default_workdir: temp.path().to_path_buf(),
+            codex_bin: "codex".to_string(),
+            backend_launch: crate::app_server_backend::AppServerLaunchConfig {
+                spawn_sandbox: None,
+                thread_sandbox: None,
+                bypass_approvals_and_sandbox: false,
+            },
+            codex_compat_home: None,
+            rounds: NonZeroUsize::new(1).expect("nonzero rounds"),
+        };
+
+        let workdir = temp.path().to_path_buf();
+        let project_dir = temp.path().join("project");
+        let progress_file = project_dir.join("MAIN.md");
+        let resolved = crate::resume::ResolvedProjectPaths {
+            progress_file,
+            project_dir: project_dir.clone(),
+            workdir: workdir.clone(),
+        };
+
+        let project_id = "project_1".to_string();
+        let progress_file_rel = PathBuf::from(".codexpotter/projects/2026/03/04/6/MAIN.md");
+
+        let index = crate::potter_rollout_resume_index::PotterRolloutResumeIndex {
+            project_started: crate::potter_rollout_resume_index::ProjectStartedIndex {
+                user_message: Some("hello".to_string()),
+                user_prompt_file: progress_file_rel.clone(),
+            },
+            completed_rounds: Vec::new(),
+            unfinished_round: Some(crate::potter_rollout_resume_index::UnfinishedRoundIndex {
+                round_current: 1,
+                round_total: 1,
+                thread_id: ThreadId::default(),
+                rollout_path: PathBuf::from("missing-rollout.jsonl"),
+            }),
+        };
+
+        let plan = ResumedProjectPlan {
+            resumed: ResumedProject {
+                project_id: project_id.clone(),
+                resolved,
+                progress_file_rel: progress_file_rel.clone(),
+                potter_rollout_lines: Vec::new(),
+                index,
+            },
+            baseline_rounds: 0,
+            git_commit_start: String::new(),
+            potter_rollout_path: temp.path().join("potter-rollout.jsonl"),
+            rounds_total: 1,
+            resume_policy: ResumePolicy::ContinueUnfinishedRound,
+            event_mode: PotterEventMode::Interactive,
+        };
+
+        let (writer_tx, writer_rx) = unbounded_channel::<JSONRPCMessage>();
+
+        run_resumed_project(config, writer_tx, plan)
+            .await
+            .expect("run resumed project");
+
+        let events = drain_potter_events(writer_rx);
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event.msg, EventMsg::Error(_))),
+            "expected an Error event, got {events:?}"
+        );
+        let completed = events
+            .iter()
+            .find_map(|event| match &event.msg {
+                EventMsg::PotterProjectCompleted { outcome } => Some(outcome),
+                _ => None,
+            })
+            .expect("PotterProjectCompleted marker");
+
+        assert!(
+            matches!(completed, PotterProjectOutcome::Fatal { .. }),
+            "expected fatal outcome, got {completed:?}"
+        );
+    }
+
+    fn drain_potter_events(mut writer_rx: UnboundedReceiver<JSONRPCMessage>) -> Vec<Event> {
+        let mut events = Vec::new();
+        while let Ok(msg) = writer_rx.try_recv() {
+            let JSONRPCMessage::Notification(notification) = msg else {
+                continue;
+            };
+            if notification.method != POTTER_EVENT_NOTIFICATION_METHOD {
+                continue;
+            }
+            let Some(params) = notification.params else {
+                continue;
+            };
+            let Ok(event) = serde_json::from_value::<Event>(params) else {
+                continue;
+            };
+            events.push(event);
+        }
+        events
     }
 }

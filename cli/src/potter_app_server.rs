@@ -983,10 +983,7 @@ async fn run_fresh_project(
             Ok(result) => result,
             Err(err) => {
                 let message = format!("{err:#}");
-                ui.emit_marker(EventMsg::Error(ErrorEvent {
-                    message: message.clone(),
-                    codex_error_info: None,
-                }));
+                ui.synthesize_round_fatal_closure(&message);
                 outcome = PotterProjectOutcome::Fatal { message };
                 break;
             }
@@ -1125,10 +1122,7 @@ async fn run_resumed_project(
             Ok(result) => result,
             Err(err) => {
                 let message = format!("{err:#}");
-                ui.emit_marker(EventMsg::Error(ErrorEvent {
-                    message: message.clone(),
-                    codex_error_info: None,
-                }));
+                ui.synthesize_round_fatal_closure(&message);
                 outcome = PotterProjectOutcome::Fatal { message };
                 ui.emit_marker(EventMsg::PotterProjectCompleted { outcome });
                 return Ok(());
@@ -1189,10 +1183,7 @@ async fn run_resumed_project(
                 Ok(result) => result,
                 Err(err) => {
                     let message = format!("{err:#}");
-                    ui.emit_marker(EventMsg::Error(ErrorEvent {
-                        message: message.clone(),
-                        codex_error_info: None,
-                    }));
+                    ui.synthesize_round_fatal_closure(&message);
                     outcome = PotterProjectOutcome::Fatal { message };
                     break;
                 }
@@ -1252,10 +1243,7 @@ async fn run_resumed_project(
             Ok(result) => result,
             Err(err) => {
                 let message = format!("{err:#}");
-                ui.emit_marker(EventMsg::Error(ErrorEvent {
-                    message: message.clone(),
-                    codex_error_info: None,
-                }));
+                ui.synthesize_round_fatal_closure(&message);
                 outcome = PotterProjectOutcome::Fatal { message };
                 break;
             }

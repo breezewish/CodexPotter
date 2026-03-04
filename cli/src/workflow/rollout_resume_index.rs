@@ -5,20 +5,20 @@ use codex_protocol::protocol::PotterRoundOutcome;
 
 use crate::workflow::rollout::PotterRolloutLine;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PotterRolloutResumeIndex {
     pub project_started: ProjectStartedIndex,
     pub completed_rounds: Vec<CompletedRoundIndex>,
     pub unfinished_round: Option<UnfinishedRoundIndex>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectStartedIndex {
     pub user_message: Option<String>,
     pub user_prompt_file: PathBuf,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompletedRoundIndex {
     pub round_current: u32,
     pub round_total: u32,
@@ -28,7 +28,7 @@ pub struct CompletedRoundIndex {
     pub outcome: PotterRoundOutcome,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnfinishedRoundIndex {
     pub round_current: u32,
     pub round_total: u32,
@@ -36,7 +36,7 @@ pub struct UnfinishedRoundIndex {
     pub rollout_path: PathBuf,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectSucceededIndex {
     pub rounds: u32,
     pub duration_secs: u64,
@@ -130,6 +130,13 @@ pub fn build_resume_index(lines: &[PotterRolloutLine]) -> anyhow::Result<PotterR
                 let Some((thread_id, rollout_path)) = builder.configured else {
                     anyhow::bail!("potter-rollout: round_finished without round_configured");
                 };
+                if builder.project_succeeded.is_some()
+                    && !matches!(outcome, PotterRoundOutcome::Completed)
+                {
+                    anyhow::bail!(
+                        "potter-rollout: project_succeeded recorded but round_finished outcome is {outcome:?}"
+                    );
+                }
                 completed_rounds.push(CompletedRoundIndex {
                     round_current: builder.round_current,
                     round_total: builder.round_total,
@@ -173,4 +180,201 @@ pub fn build_resume_index(lines: &[PotterRolloutLine]) -> anyhow::Result<PotterR
         completed_rounds,
         unfinished_round,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use pretty_assertions::assert_eq;
+
+    fn thread_id() -> ThreadId {
+        ThreadId::from_string("019ca423-63d9-7641-ae83-db060ad3c000").expect("thread id")
+    }
+
+    #[test]
+    fn build_resume_index_records_completed_round() {
+        let lines = vec![
+            PotterRolloutLine::ProjectStarted {
+                user_message: Some("hello".to_string()),
+                user_prompt_file: PathBuf::from(".codexpotter/projects/2026/02/28/1/MAIN.md"),
+            },
+            PotterRolloutLine::RoundStarted {
+                current: 1,
+                total: 10,
+            },
+            PotterRolloutLine::RoundConfigured {
+                thread_id: thread_id(),
+                rollout_path: PathBuf::from("rollout.jsonl"),
+                rollout_path_raw: None,
+                rollout_base_dir: None,
+            },
+            PotterRolloutLine::RoundFinished {
+                outcome: PotterRoundOutcome::Completed,
+            },
+        ];
+
+        let index = build_resume_index(&lines).expect("build resume index");
+        assert_eq!(
+            index.project_started.user_message,
+            Some("hello".to_string())
+        );
+        assert_eq!(
+            index.project_started.user_prompt_file,
+            PathBuf::from(".codexpotter/projects/2026/02/28/1/MAIN.md")
+        );
+        assert_eq!(index.completed_rounds.len(), 1);
+        assert_eq!(index.unfinished_round, None);
+
+        let round = &index.completed_rounds[0];
+        assert_eq!(round.round_current, 1);
+        assert_eq!(round.round_total, 10);
+        assert_eq!(round.thread_id, thread_id());
+        assert_eq!(round.rollout_path, PathBuf::from("rollout.jsonl"));
+        assert_eq!(round.project_succeeded, None);
+        assert_eq!(round.outcome, PotterRoundOutcome::Completed);
+    }
+
+    #[test]
+    fn build_resume_index_attaches_project_succeeded_to_completed_round() {
+        let lines = vec![
+            PotterRolloutLine::ProjectStarted {
+                user_message: None,
+                user_prompt_file: PathBuf::from(".codexpotter/projects/2026/02/28/1/MAIN.md"),
+            },
+            PotterRolloutLine::RoundStarted {
+                current: 1,
+                total: 10,
+            },
+            PotterRolloutLine::RoundConfigured {
+                thread_id: thread_id(),
+                rollout_path: PathBuf::from("rollout.jsonl"),
+                rollout_path_raw: None,
+                rollout_base_dir: None,
+            },
+            PotterRolloutLine::ProjectSucceeded {
+                rounds: 3,
+                duration_secs: 42,
+                user_prompt_file: PathBuf::from(".codexpotter/projects/2026/02/28/1/MAIN.md"),
+                git_commit_start: "start".to_string(),
+                git_commit_end: "end".to_string(),
+            },
+            PotterRolloutLine::RoundFinished {
+                outcome: PotterRoundOutcome::Completed,
+            },
+        ];
+
+        let index = build_resume_index(&lines).expect("build resume index");
+        assert_eq!(index.completed_rounds.len(), 1);
+
+        let round = &index.completed_rounds[0];
+        assert_eq!(
+            round.project_succeeded,
+            Some(ProjectSucceededIndex {
+                rounds: 3,
+                duration_secs: 42,
+                user_prompt_file: PathBuf::from(".codexpotter/projects/2026/02/28/1/MAIN.md"),
+                git_commit_start: "start".to_string(),
+                git_commit_end: "end".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn build_resume_index_reports_unfinished_round_at_eof() {
+        let lines = vec![
+            PotterRolloutLine::ProjectStarted {
+                user_message: Some("hello".to_string()),
+                user_prompt_file: PathBuf::from(".codexpotter/projects/2026/02/28/1/MAIN.md"),
+            },
+            PotterRolloutLine::RoundStarted {
+                current: 2,
+                total: 10,
+            },
+            PotterRolloutLine::RoundConfigured {
+                thread_id: thread_id(),
+                rollout_path: PathBuf::from("rollout.jsonl"),
+                rollout_path_raw: None,
+                rollout_base_dir: None,
+            },
+        ];
+
+        let index = build_resume_index(&lines).expect("build resume index");
+        assert_eq!(index.completed_rounds, Vec::<CompletedRoundIndex>::new());
+        assert_eq!(
+            index.unfinished_round,
+            Some(UnfinishedRoundIndex {
+                round_current: 2,
+                round_total: 10,
+                thread_id: thread_id(),
+                rollout_path: PathBuf::from("rollout.jsonl"),
+            })
+        );
+    }
+
+    #[test]
+    fn build_resume_index_errors_when_project_succeeded_round_outcome_is_not_completed() {
+        let lines = vec![
+            PotterRolloutLine::ProjectStarted {
+                user_message: None,
+                user_prompt_file: PathBuf::from(".codexpotter/projects/2026/02/28/1/MAIN.md"),
+            },
+            PotterRolloutLine::RoundStarted {
+                current: 1,
+                total: 10,
+            },
+            PotterRolloutLine::RoundConfigured {
+                thread_id: thread_id(),
+                rollout_path: PathBuf::from("rollout.jsonl"),
+                rollout_path_raw: None,
+                rollout_base_dir: None,
+            },
+            PotterRolloutLine::ProjectSucceeded {
+                rounds: 1,
+                duration_secs: 1,
+                user_prompt_file: PathBuf::from(".codexpotter/projects/2026/02/28/1/MAIN.md"),
+                git_commit_start: "start".to_string(),
+                git_commit_end: "end".to_string(),
+            },
+            PotterRolloutLine::RoundFinished {
+                outcome: PotterRoundOutcome::TaskFailed {
+                    message: "nope".to_string(),
+                },
+            },
+        ];
+
+        let err = build_resume_index(&lines).unwrap_err();
+        assert!(
+            err.to_string().contains("project_succeeded recorded"),
+            "unexpected error: {err:#}"
+        );
+        assert!(
+            err.to_string().contains("TaskFailed"),
+            "error should include outcome: {err:#}"
+        );
+    }
+
+    #[test]
+    fn build_resume_index_errors_when_round_finished_missing_round_configured() {
+        let lines = vec![
+            PotterRolloutLine::ProjectStarted {
+                user_message: None,
+                user_prompt_file: PathBuf::from(".codexpotter/projects/2026/02/28/1/MAIN.md"),
+            },
+            PotterRolloutLine::RoundStarted {
+                current: 1,
+                total: 10,
+            },
+            PotterRolloutLine::RoundFinished {
+                outcome: PotterRoundOutcome::Completed,
+            },
+        ];
+
+        let err = build_resume_index(&lines).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("round_finished without round_configured"),
+            "unexpected error: {err:#}"
+        );
+    }
 }

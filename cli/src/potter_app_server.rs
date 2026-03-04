@@ -210,10 +210,10 @@ async fn handle_request(
         }
         PotterAppServerClientRequest::ProjectList {
             request_id, params, ..
-        } => {
-            let response = project_list(&state.config.default_workdir, params)?;
-            send_response(writer_tx, request_id, response);
-        }
+        } => match project_list(&state.config.default_workdir, params) {
+            Ok(response) => send_response(writer_tx, request_id, response),
+            Err(err) => send_error(writer_tx, request_id, -32000, format!("{err:#}")),
+        },
         PotterAppServerClientRequest::ProjectStart { request_id, params } => {
             if state.running.is_some() {
                 send_error(
@@ -225,8 +225,10 @@ async fn handle_request(
                 return Ok(());
             }
 
-            let response = start_project(state, params, writer_tx, internal_tx).await?;
-            send_response(writer_tx, request_id, response);
+            match start_project(state, params, writer_tx, internal_tx).await {
+                Ok(response) => send_response(writer_tx, request_id, response),
+                Err(err) => send_error(writer_tx, request_id, -32000, format!("{err:#}")),
+            }
         }
         PotterAppServerClientRequest::ProjectResume { request_id, params } => {
             if state.running.is_some() {
@@ -239,8 +241,10 @@ async fn handle_request(
                 return Ok(());
             }
 
-            let response = resume_project(state, params)?;
-            send_response(writer_tx, request_id, response);
+            match resume_project(state, params) {
+                Ok(response) => send_response(writer_tx, request_id, response),
+                Err(err) => send_error(writer_tx, request_id, -32000, format!("{err:#}")),
+            }
         }
         PotterAppServerClientRequest::ProjectStartRounds { request_id, params } => {
             if state.running.is_some() {
@@ -253,8 +257,10 @@ async fn handle_request(
                 return Ok(());
             }
 
-            let response = start_rounds(state, params, writer_tx, internal_tx).await?;
-            send_response(writer_tx, request_id, response);
+            match start_rounds(state, params, writer_tx, internal_tx).await {
+                Ok(response) => send_response(writer_tx, request_id, response),
+                Err(err) => send_error(writer_tx, request_id, -32000, format!("{err:#}")),
+            }
         }
         PotterAppServerClientRequest::ProjectInterrupt { request_id, params } => {
             interrupt_project(state, params);
@@ -1447,5 +1453,64 @@ fn exit_reason_from_outcome(outcome: &PotterRoundOutcome) -> codex_tui::ExitReas
             codex_tui::ExitReason::TaskFailed(message.clone())
         }
         PotterRoundOutcome::Fatal { message } => codex_tui::ExitReason::Fatal(message.clone()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use pretty_assertions::assert_eq;
+
+    #[tokio::test]
+    async fn start_rounds_without_resumed_project_returns_jsonrpc_error() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config = PotterAppServerConfig {
+            default_workdir: temp.path().to_path_buf(),
+            codex_bin: "codex".to_string(),
+            backend_launch: crate::app_server_backend::AppServerLaunchConfig {
+                spawn_sandbox: None,
+                thread_sandbox: None,
+                bypass_approvals_and_sandbox: false,
+            },
+            codex_compat_home: None,
+            rounds: NonZeroUsize::new(1).expect("nonzero rounds"),
+        };
+        let mut state = ServerState {
+            config,
+            running: None,
+            resumed: None,
+        };
+
+        let (writer_tx, mut writer_rx) = unbounded_channel::<JSONRPCMessage>();
+        let (internal_tx, _internal_rx) = unbounded_channel::<InternalEvent>();
+
+        handle_request(
+            JSONRPCRequest {
+                id: RequestId::Integer(1),
+                method: "project/start_rounds".to_string(),
+                params: Some(serde_json::json!({
+                    "projectId": "project_1",
+                    "rounds": 1,
+                })),
+            },
+            &mut state,
+            &writer_tx,
+            &internal_tx,
+        )
+        .await
+        .expect("handle request");
+
+        let msg = writer_rx.recv().await.expect("response");
+        let JSONRPCMessage::Error(error) = msg else {
+            panic!("expected JSONRPC error response, got {msg:?}");
+        };
+        assert_eq!(error.id, RequestId::Integer(1));
+        assert_eq!(error.error.code, -32000);
+        assert!(
+            error.error.message.contains("no resumed project is active"),
+            "unexpected error message: {:?}",
+            error.error.message
+        );
     }
 }

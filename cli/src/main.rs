@@ -4,6 +4,7 @@ mod atomic_write;
 mod codex_compat;
 mod config;
 mod exec;
+#[cfg(test)]
 mod exec_json_round_ui;
 mod exec_jsonl;
 mod global_gitignore;
@@ -11,6 +12,7 @@ mod path_utils;
 mod potter_app_server;
 mod potter_app_server_client;
 mod potter_app_server_protocol;
+mod potter_project_render_loop;
 mod potter_rollout;
 mod potter_rollout_resume_index;
 mod potter_stream_recovery;
@@ -225,14 +227,6 @@ async fn main() -> anyhow::Result<()> {
     let backend_launch = app_server_backend::AppServerLaunchConfig::from_cli(sandbox, bypass);
     let turn_prompt = crate::project::fixed_prompt().trim_end().to_string();
 
-    let codex_compat_home = match crate::codex_compat::ensure_default_codex_compat_home() {
-        Ok(home) => home,
-        Err(err) => {
-            eprintln!("warning: failed to configure codex-compat home: {err}");
-            None
-        }
-    };
-
     let mut ui = codex_tui::CodexPotterTui::new()?;
 
     ui.set_check_for_update_on_startup(check_for_update_on_startup);
@@ -250,12 +244,57 @@ async fn main() -> anyhow::Result<()> {
     let mut project_queue_allow_prompt_user = true;
     let mut project_queue_workdir = workdir.clone();
 
+    let mut potter_app_server = crate::potter_app_server_client::PotterAppServerClient::spawn(
+        workdir.clone(),
+        codex_bin.clone(),
+        cli.rounds,
+        backend_launch,
+    )
+    .await
+    .context("spawn potter app-server")?;
+    potter_app_server
+        .initialize()
+        .await
+        .context("initialize potter app-server")?;
+
     if let Some(CliCommand::Resume { project_path }) = cli.command.as_ref() {
         let project_path = match project_path {
             Some(project_path) => Some(project_path.clone()),
             None => {
-                let rows = crate::resume_picker_index::discover_resumable_projects(&workdir)
-                    .context("discover resumable projects")?;
+                let rows = {
+                    let mut buffered_events = Vec::new();
+                    let response = potter_app_server
+                        .project_list(
+                            crate::potter_app_server_protocol::ProjectListParams::default(),
+                            &mut buffered_events,
+                        )
+                        .await
+                        .context("project/list via potter app-server")?;
+                    anyhow::ensure!(
+                        buffered_events.is_empty(),
+                        "internal error: unexpected events during project/list"
+                    );
+
+                    response
+                        .projects
+                        .into_iter()
+                        .filter_map(|project| {
+                            let created_at = std::time::UNIX_EPOCH.checked_add(
+                                std::time::Duration::from_secs(project.created_at_unix_secs),
+                            )?;
+                            let updated_at = std::time::UNIX_EPOCH.checked_add(
+                                std::time::Duration::from_secs(project.updated_at_unix_secs),
+                            )?;
+                            Some(codex_tui::ResumePickerRow {
+                                project_path: project.project_path,
+                                user_request: project.user_request,
+                                created_at,
+                                updated_at,
+                                git_branch: project.git_branch,
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                };
                 match ui.prompt_resume_picker(rows).await? {
                     codex_tui::ResumePickerOutcome::StartFresh => None,
                     codex_tui::ResumePickerOutcome::Resume(project_path) => Some(project_path),
@@ -267,11 +306,9 @@ async fn main() -> anyhow::Result<()> {
         if let Some(project_path) = project_path {
             let resume_exit = crate::resume::run_resume(
                 &mut ui,
+                &mut potter_app_server,
                 &workdir,
                 &project_path,
-                codex_bin.clone(),
-                backend_launch,
-                codex_compat_home.clone(),
                 cli.rounds,
             )
             .await
@@ -294,12 +331,10 @@ async fn main() -> anyhow::Result<()> {
 
     let project_queue_exit = crate::project_runner::run_project_queue(
         &mut ui,
+        &mut potter_app_server,
         project_queue_workdir.clone(),
         crate::project_runner::ProjectQueueOptions {
             allow_prompt_user: project_queue_allow_prompt_user,
-            codex_bin: codex_bin.clone(),
-            backend_launch,
-            codex_compat_home: codex_compat_home.clone(),
             rounds: cli.rounds,
             turn_prompt: turn_prompt.clone(),
         },
@@ -321,6 +356,8 @@ async fn main() -> anyhow::Result<()> {
             std::process::exit(1);
         }
     }
+
+    let _ = potter_app_server.shutdown().await;
 
     drop(ui);
     if let Some(project_path) = resume_note_project_path {

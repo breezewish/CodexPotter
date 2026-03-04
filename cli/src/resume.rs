@@ -1,18 +1,19 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ffi::OsStr;
-use std::future::Future;
+#[cfg(test)]
 use std::io::BufRead as _;
 use std::num::NonZeroUsize;
 use std::path::Path;
 use std::path::PathBuf;
-use std::pin::Pin;
 use std::time::Instant;
 
 use anyhow::Context;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
 use codex_protocol::protocol::PotterRoundOutcome;
+#[cfg(test)]
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_tui::ExitReason;
 use tokio::sync::mpsc::unbounded_channel;
@@ -20,18 +21,13 @@ use tokio::sync::mpsc::unbounded_channel;
 const PROJECT_MAIN_FILE: &str = "MAIN.md";
 const CODEXPOTTER_DIR: &str = ".codexpotter";
 
-type UiFuture<'a, T> = Pin<Box<dyn Future<Output = anyhow::Result<T>> + 'a>>;
-
-trait ResumeUi {
+trait ResumeUi: crate::round_runner::PotterRoundUi {
     fn clear(&mut self) -> anyhow::Result<()>;
-    fn set_project_started_at(&mut self, started_at: Instant);
 
-    fn render_round<'a>(
+    fn prompt_action_picker<'a>(
         &'a mut self,
-        params: codex_tui::RenderRoundParams,
-    ) -> UiFuture<'a, codex_tui::AppExitInfo>;
-
-    fn prompt_action_picker<'a>(&'a mut self, actions: Vec<String>) -> UiFuture<'a, Option<usize>>;
+        actions: Vec<String>,
+    ) -> crate::round_runner::UiFuture<'a, Option<usize>>;
 }
 
 impl ResumeUi for codex_tui::CodexPotterTui {
@@ -39,18 +35,10 @@ impl ResumeUi for codex_tui::CodexPotterTui {
         codex_tui::CodexPotterTui::clear(self)
     }
 
-    fn set_project_started_at(&mut self, started_at: Instant) {
-        codex_tui::CodexPotterTui::set_project_started_at(self, started_at);
-    }
-
-    fn render_round<'a>(
+    fn prompt_action_picker<'a>(
         &'a mut self,
-        params: codex_tui::RenderRoundParams,
-    ) -> UiFuture<'a, codex_tui::AppExitInfo> {
-        Box::pin(codex_tui::CodexPotterTui::render_round(self, params))
-    }
-
-    fn prompt_action_picker<'a>(&'a mut self, actions: Vec<String>) -> UiFuture<'a, Option<usize>> {
+        actions: Vec<String>,
+    ) -> crate::round_runner::UiFuture<'a, Option<usize>> {
         Box::pin(codex_tui::CodexPotterTui::prompt_action_picker(
             self, actions,
         ))
@@ -69,51 +57,58 @@ impl ResumeClock for SystemResumeClock {
     }
 }
 
-trait ResumeRoundRunner<U: ResumeUi> {
-    fn continue_round<'a>(
-        &'a self,
-        ui: &'a mut U,
-        context: &'a crate::round_runner::PotterRoundContext,
-        options: crate::round_runner::PotterContinueRoundOptions,
-    ) -> UiFuture<'a, crate::round_runner::PotterRoundResult>;
+trait ResumeAppServer: crate::potter_project_render_loop::PotterEventSource {
+    fn project_start_rounds<'a>(
+        &'a mut self,
+        params: crate::potter_app_server_protocol::ProjectStartRoundsParams,
+    ) -> crate::round_runner::UiFuture<
+        'a,
+        (
+            crate::potter_app_server_protocol::ProjectStartRoundsResponse,
+            Vec<Event>,
+        ),
+    >;
 
-    fn run_round<'a>(
-        &'a self,
-        ui: &'a mut U,
-        context: &'a crate::round_runner::PotterRoundContext,
-        options: crate::round_runner::PotterRoundOptions,
-    ) -> UiFuture<'a, crate::round_runner::PotterRoundResult>;
+    fn project_interrupt<'a>(
+        &'a mut self,
+        project_id: String,
+    ) -> crate::round_runner::UiFuture<'a, ()>;
 }
 
-struct RealResumeRoundRunner;
-
-impl ResumeRoundRunner<codex_tui::CodexPotterTui> for RealResumeRoundRunner {
-    fn continue_round<'a>(
-        &'a self,
-        ui: &'a mut codex_tui::CodexPotterTui,
-        context: &'a crate::round_runner::PotterRoundContext,
-        options: crate::round_runner::PotterContinueRoundOptions,
-    ) -> UiFuture<'a, crate::round_runner::PotterRoundResult> {
-        Box::pin(crate::round_runner::continue_potter_round(
-            ui, context, options,
-        ))
+impl ResumeAppServer for crate::potter_app_server_client::PotterAppServerClient {
+    fn project_start_rounds<'a>(
+        &'a mut self,
+        params: crate::potter_app_server_protocol::ProjectStartRoundsParams,
+    ) -> crate::round_runner::UiFuture<
+        'a,
+        (
+            crate::potter_app_server_protocol::ProjectStartRoundsResponse,
+            Vec<Event>,
+        ),
+    > {
+        Box::pin(async move {
+            let mut buffered_events = Vec::new();
+            let response = self
+                .project_start_rounds(params, &mut buffered_events)
+                .await?;
+            Ok((response, buffered_events))
+        })
     }
 
-    fn run_round<'a>(
-        &'a self,
-        ui: &'a mut codex_tui::CodexPotterTui,
-        context: &'a crate::round_runner::PotterRoundContext,
-        options: crate::round_runner::PotterRoundOptions,
-    ) -> UiFuture<'a, crate::round_runner::PotterRoundResult> {
-        Box::pin(crate::round_runner::run_potter_round(ui, context, options))
+    fn project_interrupt<'a>(
+        &'a mut self,
+        project_id: String,
+    ) -> crate::round_runner::UiFuture<'a, ()> {
+        Box::pin(async move {
+            let mut buffered_events = Vec::new();
+            self.project_interrupt(
+                crate::potter_app_server_protocol::ProjectInterruptParams { project_id },
+                &mut buffered_events,
+            )
+            .await?;
+            Ok(())
+        })
     }
-}
-
-struct ResumeRunOptions {
-    codex_bin: String,
-    backend_launch: crate::app_server_backend::AppServerLaunchConfig,
-    codex_compat_home: Option<PathBuf>,
-    iterate_rounds: NonZeroUsize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -196,68 +191,51 @@ pub fn resolve_project_paths(
 /// always sees the initial prompt and round context first.
 pub async fn run_resume(
     ui: &mut codex_tui::CodexPotterTui,
+    app_server: &mut crate::potter_app_server_client::PotterAppServerClient,
     cwd: &Path,
     project_path: &Path,
-    codex_bin: String,
-    backend_launch: crate::app_server_backend::AppServerLaunchConfig,
-    codex_compat_home: Option<PathBuf>,
     iterate_rounds: NonZeroUsize,
 ) -> anyhow::Result<ResumeExit> {
-    let resolved = resolve_project_paths(cwd, project_path)?;
-    std::env::set_current_dir(&resolved.workdir)
-        .with_context(|| format!("set current directory to {}", resolved.workdir.display()))?;
-    run_resume_with_deps(
-        ui,
-        &resolved,
-        ResumeRunOptions {
-            codex_bin,
-            backend_launch,
-            codex_compat_home,
-            iterate_rounds,
-        },
-        &SystemResumeClock,
-        &RealResumeRoundRunner,
-    )
-    .await
+    let mut buffered_events = Vec::new();
+    let resume = app_server
+        .project_resume(
+            crate::potter_app_server_protocol::ProjectResumeParams {
+                project_path: project_path.to_path_buf(),
+                cwd: Some(cwd.to_path_buf()),
+                event_mode: Some(crate::potter_app_server_protocol::PotterEventMode::Interactive),
+            },
+            &mut buffered_events,
+        )
+        .await
+        .context("project/resume via potter app-server")?;
+    anyhow::ensure!(
+        buffered_events.is_empty(),
+        "internal error: unexpected events during potter app-server project/resume"
+    );
+
+    std::env::set_current_dir(&resume.working_dir)
+        .with_context(|| format!("set current directory to {}", resume.working_dir.display()))?;
+
+    run_resume_with_deps(ui, app_server, resume, iterate_rounds, &SystemResumeClock).await
 }
 
-async fn run_resume_with_deps<U, C, R>(
+async fn run_resume_with_deps<U, S, C>(
     ui: &mut U,
-    resolved: &ResolvedProjectPaths,
-    options: ResumeRunOptions,
+    app_server: &mut S,
+    resume: crate::potter_app_server_protocol::ProjectResumeResponse,
+    iterate_rounds: NonZeroUsize,
     clock: &C,
-    round_runner: &R,
 ) -> anyhow::Result<ResumeExit>
 where
     U: ResumeUi,
+    S: ResumeAppServer,
     C: ResumeClock,
-    R: ResumeRoundRunner<U>,
 {
-    let ResumeRunOptions {
-        codex_bin,
-        backend_launch,
-        codex_compat_home,
-        iterate_rounds,
-    } = options;
+    let project_id = resume.project_id.clone();
+    let prompt_footer =
+        codex_tui::PromptFooterContext::new(resume.working_dir.clone(), resume.git_branch.clone());
 
-    let git_branch = crate::project::resolve_git_branch(&resolved.workdir);
-    let prompt_footer = codex_tui::PromptFooterContext::new(resolved.workdir.clone(), git_branch);
-
-    let progress_file_rel = resolved
-        .progress_file
-        .strip_prefix(&resolved.workdir)
-        .context("derive progress file relative path")?
-        .to_path_buf();
-    let potter_rollout_path = crate::potter_rollout::potter_rollout_path(&resolved.project_dir);
-    let potter_rollout_lines = load_potter_rollout_lines(&potter_rollout_path)?;
-
-    let ResumeReplayPlans {
-        completed_rounds: replay_rounds,
-        mut unfinished_round,
-    } = build_round_replay_plans(resolved, &potter_rollout_lines)?;
-    let has_completed_rounds = !replay_rounds.is_empty();
-
-    let (op_tx, mut op_rx) = unbounded_channel::<codex_protocol::protocol::Op>();
+    let (op_tx, mut op_rx) = unbounded_channel::<Op>();
     tokio::spawn(async move { while op_rx.recv().await.is_some() {} });
 
     ui.clear().context("clear TUI before resume replay")?;
@@ -269,274 +247,168 @@ where
     ui.set_project_started_at(replay_started_at);
 
     let mut user_cancelled_replay = false;
-    for (idx, plan) in replay_rounds.into_iter().enumerate() {
-        let RoundReplayPlan { events, outcome } = plan;
-        let (event_tx, event_rx) = unbounded_channel::<Event>();
-        for msg in events {
-            let _ = event_tx.send(Event {
-                id: "".to_string(),
-                msg,
-            });
-        }
-        drop(event_tx);
+    for (idx, round) in resume.replay.completed_rounds.iter().enumerate() {
+        let exit_reason = render_replay_events(
+            ui,
+            &prompt_footer,
+            op_tx.clone(),
+            idx != 0,
+            round.events.clone(),
+        )
+        .await?;
 
-        let (_fatal_exit_tx, fatal_exit_rx) = unbounded_channel::<String>();
-
-        let exit_info = ui
-            .render_round(codex_tui::RenderRoundParams {
-                prompt: String::new(),
-                pad_before_first_cell: idx != 0,
-                status_header_prefix: None,
-                prompt_footer: prompt_footer.clone(),
-                codex_op_tx: op_tx.clone(),
-                codex_event_rx: event_rx,
-                fatal_exit_rx,
-            })
-            .await?;
-
-        match replay_round_exit_decision(&exit_info.exit_reason, &outcome) {
+        match replay_round_exit_decision(&exit_reason, &round.outcome) {
             ReplayRoundExitDecision::Continue => {}
             ReplayRoundExitDecision::UserCancelled => {
                 user_cancelled_replay = true;
                 break;
             }
             ReplayRoundExitDecision::FatalExitRequested => {
+                let _ = app_server.project_interrupt(project_id.clone()).await;
                 return Ok(ResumeExit::FatalExitRequested);
             }
         }
     }
 
     if user_cancelled_replay {
+        let _ = app_server.project_interrupt(project_id.clone()).await;
         return Ok(ResumeExit::UserRequested);
     }
 
-    if let Some(unfinished) = unfinished_round.as_mut() {
-        let events = build_unfinished_round_pre_action_events(resolved, unfinished);
+    let has_completed_rounds = !resume.replay.completed_rounds.is_empty();
+    if let Some(unfinished) = resume.unfinished_round.as_ref() {
+        let exit_reason = render_replay_events(
+            ui,
+            &prompt_footer,
+            op_tx.clone(),
+            has_completed_rounds,
+            unfinished.pre_action_events.clone(),
+        )
+        .await?;
 
-        let (event_tx, event_rx) = unbounded_channel::<Event>();
-        for msg in events {
-            let _ = event_tx.send(Event {
-                id: "".to_string(),
-                msg,
-            });
-        }
-        drop(event_tx);
-
-        let (_fatal_exit_tx, fatal_exit_rx) = unbounded_channel::<String>();
-
-        let exit_info = ui
-            .render_round(codex_tui::RenderRoundParams {
-                prompt: String::new(),
-                pad_before_first_cell: has_completed_rounds,
-                status_header_prefix: None,
-                prompt_footer: prompt_footer.clone(),
-                codex_op_tx: op_tx.clone(),
-                codex_event_rx: event_rx,
-                fatal_exit_rx,
-            })
-            .await?;
-
-        match exit_info.exit_reason {
+        match exit_reason {
             ExitReason::Completed | ExitReason::TaskFailed(_) => {}
             ExitReason::UserRequested => return Ok(ResumeExit::UserRequested),
             ExitReason::Fatal(_) => return Ok(ResumeExit::FatalExitRequested),
         }
     }
 
-    let iterate_rounds_usize = iterate_rounds.get();
-    let action = match &unfinished_round {
-        Some(unfinished) => {
-            let remaining_rounds = unfinished.remaining_rounds_including_current()?;
-            let rounds_label = if remaining_rounds == 1 {
-                "round"
-            } else {
-                "rounds"
-            };
-            format!(
-                "Continue & iterate {} more {}",
-                remaining_rounds, rounds_label
-            )
-        }
-        None => {
-            let rounds_label = if iterate_rounds_usize == 1 {
-                "round"
-            } else {
-                "rounds"
-            };
-            format!("Iterate {} more {}", iterate_rounds_usize, rounds_label)
-        }
+    let action = if let Some(unfinished) = resume.unfinished_round.as_ref() {
+        let remaining_rounds = unfinished.remaining_rounds_including_current;
+        let rounds_label = if remaining_rounds == 1 {
+            "round"
+        } else {
+            "rounds"
+        };
+        format!("Continue & iterate {remaining_rounds} more {rounds_label}")
+    } else {
+        let rounds = iterate_rounds.get();
+        let rounds_label = if rounds == 1 { "round" } else { "rounds" };
+        format!("Iterate {rounds} more {rounds_label}")
     };
 
     let selection = ui.prompt_action_picker(vec![action]).await?;
     let Some(index) = selection else {
+        let _ = app_server.project_interrupt(project_id.clone()).await;
         return Ok(ResumeExit::UserRequested);
     };
     if index != 0 {
+        let _ = app_server.project_interrupt(project_id.clone()).await;
         return Ok(ResumeExit::Completed);
     }
 
     let project_started_at = clock.now_instant();
     ui.set_project_started_at(project_started_at);
 
-    crate::project::set_progress_file_finite_incantatem(
-        &resolved.workdir,
-        &progress_file_rel,
-        false,
+    let rounds = resume
+        .unfinished_round
+        .as_ref()
+        .map(|unfinished| unfinished.remaining_rounds_including_current)
+        .unwrap_or_else(|| u32::try_from(iterate_rounds.get()).unwrap_or(u32::MAX));
+    let initial_status_header_prefix = resume.unfinished_round.as_ref().map(|unfinished| {
+        format!(
+            "Round {}/{}",
+            unfinished.round_current, unfinished.round_total
+        )
+    });
+
+    let (start_rounds_response, buffered_events) = app_server
+        .project_start_rounds(
+            crate::potter_app_server_protocol::ProjectStartRoundsParams {
+                project_id: project_id.clone(),
+                rounds: Some(rounds),
+                resume_policy: None,
+                event_mode: Some(crate::potter_app_server_protocol::PotterEventMode::Interactive),
+            },
+        )
+        .await
+        .context("project/start_rounds via potter app-server")?;
+    anyhow::ensure!(
+        start_rounds_response.rounds_total == rounds,
+        "internal error: potter app-server returned rounds_total={} expected {rounds}",
+        start_rounds_response.rounds_total
+    );
+
+    let exit = crate::potter_project_render_loop::run_potter_project_render_loop(
+        ui,
+        app_server,
+        &project_id,
+        crate::potter_project_render_loop::PotterProjectRenderOptions {
+            turn_prompt: crate::project::fixed_prompt().trim_end().to_string(),
+            prompt_footer,
+            pad_before_first_cell: true,
+            initial_status_header_prefix,
+        },
+        buffered_events,
     )
-    .context("reset progress file finite_incantatem")?;
+    .await?;
 
-    let baseline_rounds = count_completed_rounds(&potter_rollout_lines);
-    let baseline_rounds_u32 = u32::try_from(baseline_rounds).unwrap_or(u32::MAX);
-
-    let developer_prompt = crate::project::render_developer_prompt(&progress_file_rel);
-    let turn_prompt = crate::project::fixed_prompt().trim_end().to_string();
-    let git_commit_start =
-        crate::project::progress_file_git_commit_start(&resolved.workdir, &progress_file_rel)
-            .context("read git_commit from progress file")?;
-
-    let round_context = crate::round_runner::PotterRoundContext {
-        codex_bin,
-        developer_prompt,
-        backend_launch,
-        backend_event_mode: crate::app_server_backend::AppServerEventMode::Interactive,
-        codex_compat_home,
-        thread_cwd: Some(resolved.workdir.clone()),
-        turn_prompt,
-        workdir: resolved.workdir.clone(),
-        progress_file_rel: progress_file_rel.clone(),
-        user_prompt_file: progress_file_rel.clone(),
-        git_commit_start,
-        potter_rollout_path,
-        project_started_at,
-    };
-
-    match unfinished_round {
-        Some(unfinished) => {
-            let remaining_rounds = unfinished.remaining_rounds_including_current()?;
-            let remaining_after_continue = remaining_rounds.saturating_sub(1);
-
-            let mut replay_event_msgs = Vec::new();
-            if let Some((user_message, user_prompt_file)) = unfinished.project_started {
-                replay_event_msgs.push(EventMsg::PotterProjectStarted {
-                    user_message,
-                    working_dir: resolved.workdir.clone(),
-                    project_dir: resolved.project_dir.clone(),
-                    user_prompt_file,
-                });
-            }
-            if let Some(cfg) = synthesize_session_configured_event(
-                unfinished.thread_id,
-                unfinished.rollout_path.clone(),
-            )? {
-                replay_event_msgs.push(EventMsg::SessionConfigured(cfg));
-            }
-            let mut rollout_events = read_upstream_rollout_event_msgs(&unfinished.rollout_path)
-                .with_context(|| format!("replay rollout {}", unfinished.rollout_path.display()))?;
-            replay_event_msgs.append(&mut rollout_events);
-
-            let round_result = round_runner
-                .continue_round(
-                    ui,
-                    &round_context,
-                    crate::round_runner::PotterContinueRoundOptions {
-                        pad_before_first_cell: true,
-                        round_current: unfinished.round_current,
-                        round_total: unfinished.round_total,
-                        project_succeeded_rounds: baseline_rounds_u32.saturating_add(1),
-                        resume_thread_id: unfinished.thread_id,
-                        replay_event_msgs,
-                    },
-                )
-                .await?;
-
-            match &round_result.exit_reason {
-                ExitReason::UserRequested => return Ok(ResumeExit::UserRequested),
-                ExitReason::TaskFailed(_) => return Ok(ResumeExit::Completed),
-                ExitReason::Fatal(_) => return Ok(ResumeExit::FatalExitRequested),
-                ExitReason::Completed => {}
-            }
-            if round_result.stop_due_to_finite_incantatem {
-                return Ok(ResumeExit::Completed);
-            }
-
-            let mut user_requested_exit = false;
-            for offset in 0..remaining_after_continue {
-                let current_round = unfinished
-                    .round_current
-                    .saturating_add(u32::try_from(offset.saturating_add(1)).unwrap_or(u32::MAX));
-                let project_succeeded_rounds = baseline_rounds_u32
-                    .saturating_add(u32::try_from(offset.saturating_add(2)).unwrap_or(u32::MAX));
-                let round_result = round_runner
-                    .run_round(
-                        ui,
-                        &round_context,
-                        crate::round_runner::PotterRoundOptions {
-                            pad_before_first_cell: true,
-                            project_started: None,
-                            round_current: current_round,
-                            round_total: unfinished.round_total,
-                            project_succeeded_rounds,
-                        },
-                    )
-                    .await?;
-
-                match &round_result.exit_reason {
-                    ExitReason::UserRequested => {
-                        user_requested_exit = true;
-                        break;
-                    }
-                    ExitReason::TaskFailed(_) => break,
-                    ExitReason::Fatal(_) => return Ok(ResumeExit::FatalExitRequested),
-                    ExitReason::Completed => {}
-                }
-                if round_result.stop_due_to_finite_incantatem {
-                    break;
-                }
-            }
-            if user_requested_exit {
-                return Ok(ResumeExit::UserRequested);
-            }
+    match exit {
+        crate::potter_project_render_loop::PotterProjectRenderExit::Completed { .. } => {
+            Ok(ResumeExit::Completed)
         }
-        None => {
-            let iterate_rounds_u32 = u32::try_from(iterate_rounds_usize).unwrap_or(u32::MAX);
-            let mut user_requested_exit = false;
-            for offset in 0..iterate_rounds_usize {
-                let current_round = u32::try_from(offset.saturating_add(1)).unwrap_or(u32::MAX);
-                let project_succeeded_rounds = baseline_rounds_u32.saturating_add(current_round);
-                let round_result = round_runner
-                    .run_round(
-                        ui,
-                        &round_context,
-                        crate::round_runner::PotterRoundOptions {
-                            pad_before_first_cell: true,
-                            project_started: None,
-                            round_current: current_round,
-                            round_total: iterate_rounds_u32,
-                            project_succeeded_rounds,
-                        },
-                    )
-                    .await?;
-
-                match &round_result.exit_reason {
-                    ExitReason::UserRequested => {
-                        user_requested_exit = true;
-                        break;
-                    }
-                    ExitReason::TaskFailed(_) => break,
-                    ExitReason::Fatal(_) => return Ok(ResumeExit::FatalExitRequested),
-                    ExitReason::Completed => {}
-                }
-                if round_result.stop_due_to_finite_incantatem {
-                    break;
-                }
-            }
-            if user_requested_exit {
-                return Ok(ResumeExit::UserRequested);
-            }
+        crate::potter_project_render_loop::PotterProjectRenderExit::UserRequested => {
+            let _ = app_server.project_interrupt(project_id.clone()).await;
+            Ok(ResumeExit::UserRequested)
+        }
+        crate::potter_project_render_loop::PotterProjectRenderExit::FatalExitRequested => {
+            let _ = app_server.project_interrupt(project_id.clone()).await;
+            Ok(ResumeExit::FatalExitRequested)
         }
     }
+}
 
-    Ok(ResumeExit::Completed)
+async fn render_replay_events<U: ResumeUi>(
+    ui: &mut U,
+    prompt_footer: &codex_tui::PromptFooterContext,
+    op_tx: tokio::sync::mpsc::UnboundedSender<Op>,
+    pad_before_first_cell: bool,
+    events: Vec<EventMsg>,
+) -> anyhow::Result<ExitReason> {
+    let (event_tx, event_rx) = unbounded_channel::<Event>();
+    for msg in events {
+        let _ = event_tx.send(Event {
+            id: "".to_string(),
+            msg,
+        });
+    }
+    drop(event_tx);
+
+    let (_fatal_exit_tx, fatal_exit_rx) = unbounded_channel::<String>();
+
+    let exit_info = ui
+        .render_round(codex_tui::RenderRoundParams {
+            prompt: String::new(),
+            pad_before_first_cell,
+            status_header_prefix: None,
+            prompt_footer: prompt_footer.clone(),
+            codex_op_tx: op_tx,
+            codex_event_rx: event_rx,
+            fatal_exit_rx,
+        })
+        .await?;
+
+    Ok(exit_info.exit_reason)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -554,6 +426,7 @@ enum ReplayRoundExitDecision {
     FatalExitRequested,
 }
 
+#[cfg(test)]
 fn load_potter_rollout_lines(
     potter_rollout_path: &Path,
 ) -> anyhow::Result<Vec<crate::potter_rollout::PotterRolloutLine>> {
@@ -642,18 +515,21 @@ fn derive_project_workdir(progress_file: &Path) -> anyhow::Result<PathBuf> {
     }
 }
 
+#[cfg(test)]
 #[derive(Debug)]
 struct RoundReplayPlan {
     events: Vec<EventMsg>,
     outcome: PotterRoundOutcome,
 }
 
+#[cfg(test)]
 #[derive(Debug)]
 struct ResumeReplayPlans {
     completed_rounds: Vec<RoundReplayPlan>,
     unfinished_round: Option<UnfinishedRoundPlan>,
 }
 
+#[cfg(test)]
 #[derive(Debug)]
 struct UnfinishedRoundPlan {
     round_current: u32,
@@ -663,6 +539,7 @@ struct UnfinishedRoundPlan {
     project_started: Option<(Option<String>, PathBuf)>,
 }
 
+#[cfg(test)]
 impl UnfinishedRoundPlan {
     fn remaining_rounds_including_current(&self) -> anyhow::Result<usize> {
         if self.round_current == 0 {
@@ -688,18 +565,7 @@ impl UnfinishedRoundPlan {
     }
 }
 
-fn count_completed_rounds(lines: &[crate::potter_rollout::PotterRolloutLine]) -> usize {
-    lines
-        .iter()
-        .filter(|line| {
-            matches!(
-                line,
-                crate::potter_rollout::PotterRolloutLine::RoundFinished { .. }
-            )
-        })
-        .count()
-}
-
+#[cfg(test)]
 fn build_round_replay_plans(
     project: &ResolvedProjectPaths,
     potter_rollout_lines: &[crate::potter_rollout::PotterRolloutLine],
@@ -774,6 +640,7 @@ fn build_round_replay_plans(
     })
 }
 
+#[cfg(test)]
 fn resolve_rollout_path_for_replay(project: &ResolvedProjectPaths, rollout_path: &Path) -> PathBuf {
     if rollout_path.is_absolute() {
         return rollout_path.to_path_buf();
@@ -781,6 +648,7 @@ fn resolve_rollout_path_for_replay(project: &ResolvedProjectPaths, rollout_path:
     project.workdir.join(rollout_path)
 }
 
+#[cfg(test)]
 fn synthesize_session_configured_event(
     thread_id: codex_protocol::ThreadId,
     rollout_path: PathBuf,
@@ -803,12 +671,14 @@ fn synthesize_session_configured_event(
     }))
 }
 
+#[cfg(test)]
 struct RolloutContextSnapshot {
     cwd: PathBuf,
     model: String,
     model_provider_id: String,
 }
 
+#[cfg(test)]
 fn read_rollout_context_snapshot(
     rollout_path: &Path,
 ) -> anyhow::Result<Option<RolloutContextSnapshot>> {
@@ -885,6 +755,7 @@ fn read_rollout_context_snapshot(
     }))
 }
 
+#[cfg(test)]
 fn read_upstream_rollout_event_msgs(rollout_path: &Path) -> anyhow::Result<Vec<EventMsg>> {
     let file = std::fs::File::open(rollout_path)
         .with_context(|| format!("open rollout {}", rollout_path.display()))?;
@@ -920,6 +791,7 @@ fn read_upstream_rollout_event_msgs(rollout_path: &Path) -> anyhow::Result<Vec<E
 ///
 /// Note: the trailing `PotterRoundFinished` is synthesized so the round renderer exits cleanly
 /// (otherwise EOF would be treated as a fatal "Backend disconnected").
+#[cfg(test)]
 fn build_unfinished_round_pre_action_events(
     project: &ResolvedProjectPaths,
     unfinished: &mut UnfinishedRoundPlan,
@@ -1113,6 +985,8 @@ pub fn filter_pending_interactive_prompts_for_replay(events: Vec<EventMsg>) -> V
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_protocol::protocol::PotterProjectOutcome;
+    use codex_protocol::protocol::TokenUsage;
     use pretty_assertions::assert_eq;
 
     fn write_main(root: &Path, rel: &str) -> PathBuf {
@@ -1135,34 +1009,63 @@ mod tests {
         ops: Vec<MockUiOp>,
     }
 
-    impl ResumeUi for MockResumeUi {
-        fn clear(&mut self) -> anyhow::Result<()> {
-            self.ops.push(MockUiOp::Clear);
-            Ok(())
-        }
-
+    impl crate::round_runner::PotterRoundUi for MockResumeUi {
         fn set_project_started_at(&mut self, started_at: Instant) {
             self.ops.push(MockUiOp::SetProjectStartedAt(started_at));
         }
 
         fn render_round<'a>(
             &'a mut self,
-            _params: codex_tui::RenderRoundParams,
-        ) -> UiFuture<'a, codex_tui::AppExitInfo> {
+            params: codex_tui::RenderRoundParams,
+        ) -> crate::round_runner::UiFuture<'a, codex_tui::AppExitInfo> {
             self.ops.push(MockUiOp::RenderRound);
-            Box::pin(async {
+
+            Box::pin(async move {
+                let codex_tui::RenderRoundParams {
+                    mut codex_event_rx, ..
+                } = params;
+                while let Some(event) = codex_event_rx.recv().await {
+                    if let EventMsg::PotterRoundFinished { outcome } = &event.msg {
+                        return Ok(codex_tui::AppExitInfo {
+                            token_usage: TokenUsage::default(),
+                            thread_id: None,
+                            exit_reason: match outcome {
+                                PotterRoundOutcome::Completed => codex_tui::ExitReason::Completed,
+                                PotterRoundOutcome::UserRequested => {
+                                    codex_tui::ExitReason::UserRequested
+                                }
+                                PotterRoundOutcome::TaskFailed { message } => {
+                                    codex_tui::ExitReason::TaskFailed(message.clone())
+                                }
+                                PotterRoundOutcome::Fatal { message } => {
+                                    codex_tui::ExitReason::Fatal(message.clone())
+                                }
+                            },
+                        });
+                    }
+                }
+
                 Ok(codex_tui::AppExitInfo {
-                    token_usage: codex_protocol::protocol::TokenUsage::default(),
+                    token_usage: TokenUsage::default(),
                     thread_id: None,
-                    exit_reason: codex_tui::ExitReason::Completed,
+                    exit_reason: codex_tui::ExitReason::Fatal(
+                        "event stream closed unexpectedly".to_string(),
+                    ),
                 })
             })
+        }
+    }
+
+    impl ResumeUi for MockResumeUi {
+        fn clear(&mut self) -> anyhow::Result<()> {
+            self.ops.push(MockUiOp::Clear);
+            Ok(())
         }
 
         fn prompt_action_picker<'a>(
             &'a mut self,
             actions: Vec<String>,
-        ) -> UiFuture<'a, Option<usize>> {
+        ) -> crate::round_runner::UiFuture<'a, Option<usize>> {
             self.ops.push(MockUiOp::PromptActionPicker(actions));
             Box::pin(async { Ok(Some(0)) })
         }
@@ -1192,51 +1095,42 @@ mod tests {
     }
 
     #[derive(Debug, Default)]
-    struct CapturingRoundRunner {
-        project_started_at: std::sync::Mutex<Vec<Instant>>,
+    struct MockAppServer {
+        buffered_events: Vec<Event>,
     }
 
-    impl CapturingRoundRunner {
-        fn project_started_at(&self) -> Vec<Instant> {
-            self.project_started_at.lock().expect("lock").clone()
+    impl crate::potter_project_render_loop::PotterEventSource for MockAppServer {
+        fn read_next_event<'a>(&'a mut self) -> crate::round_runner::UiFuture<'a, Option<Event>> {
+            Box::pin(async { Ok(None) })
         }
     }
 
-    impl ResumeRoundRunner<MockResumeUi> for CapturingRoundRunner {
-        fn continue_round<'a>(
-            &'a self,
-            _ui: &'a mut MockResumeUi,
-            context: &'a crate::round_runner::PotterRoundContext,
-            _options: crate::round_runner::PotterContinueRoundOptions,
-        ) -> UiFuture<'a, crate::round_runner::PotterRoundResult> {
+    impl ResumeAppServer for MockAppServer {
+        fn project_start_rounds<'a>(
+            &'a mut self,
+            params: crate::potter_app_server_protocol::ProjectStartRoundsParams,
+        ) -> crate::round_runner::UiFuture<
+            'a,
+            (
+                crate::potter_app_server_protocol::ProjectStartRoundsResponse,
+                Vec<Event>,
+            ),
+        > {
             Box::pin(async move {
-                self.project_started_at
-                    .lock()
-                    .expect("lock")
-                    .push(context.project_started_at);
-                Ok(crate::round_runner::PotterRoundResult {
-                    exit_reason: codex_tui::ExitReason::Completed,
-                    stop_due_to_finite_incantatem: false,
-                })
+                Ok((
+                    crate::potter_app_server_protocol::ProjectStartRoundsResponse {
+                        rounds_total: params.rounds.unwrap_or(1),
+                    },
+                    std::mem::take(&mut self.buffered_events),
+                ))
             })
         }
 
-        fn run_round<'a>(
-            &'a self,
-            _ui: &'a mut MockResumeUi,
-            context: &'a crate::round_runner::PotterRoundContext,
-            _options: crate::round_runner::PotterRoundOptions,
-        ) -> UiFuture<'a, crate::round_runner::PotterRoundResult> {
-            Box::pin(async move {
-                self.project_started_at
-                    .lock()
-                    .expect("lock")
-                    .push(context.project_started_at);
-                Ok(crate::round_runner::PotterRoundResult {
-                    exit_reason: codex_tui::ExitReason::Completed,
-                    stop_due_to_finite_incantatem: false,
-                })
-            })
+        fn project_interrupt<'a>(
+            &'a mut self,
+            _project_id: String,
+        ) -> crate::round_runner::UiFuture<'a, ()> {
+            Box::pin(async { Ok(()) })
         }
     }
 
@@ -1245,64 +1139,73 @@ mod tests {
         use std::time::Duration;
 
         let temp = tempfile::tempdir().expect("tempdir");
-        let _main = write_main(temp.path(), ".codexpotter/projects/2026/02/01/1");
-        let resolved =
-            resolve_project_paths(temp.path(), Path::new("2026/02/01/1")).expect("resolve");
-
-        let potter_rollout_path = crate::potter_rollout::potter_rollout_path(&resolved.project_dir);
-        crate::potter_rollout::append_line(
-            &potter_rollout_path,
-            &crate::potter_rollout::PotterRolloutLine::ProjectStarted {
-                user_message: Some("hello".to_string()),
-                user_prompt_file: PathBuf::from(".codexpotter/projects/2026/02/01/1/MAIN.md"),
-            },
-        )
-        .expect("append project_started");
-        crate::potter_rollout::append_line(
-            &potter_rollout_path,
-            &crate::potter_rollout::PotterRolloutLine::RoundStarted {
-                current: 1,
-                total: 1,
-            },
-        )
-        .expect("append round_started");
-
-        let thread_id = codex_protocol::ThreadId::default();
-        crate::potter_rollout::append_line(
-            &potter_rollout_path,
-            &crate::potter_rollout::PotterRolloutLine::RoundConfigured {
-                thread_id,
-                rollout_path: PathBuf::from("rollout.jsonl"),
-                rollout_path_raw: None,
-                rollout_base_dir: None,
-            },
-        )
-        .expect("append round_configured");
-        std::fs::write(resolved.workdir.join("rollout.jsonl"), "").expect("write rollout");
-
         let base = Instant::now();
         let replay_started_at = base + Duration::from_secs(10);
         let continue_started_at = base + Duration::from_secs(20);
         let clock = FixedResumeClock::new(vec![replay_started_at, continue_started_at]);
 
-        let round_runner = CapturingRoundRunner::default();
+        let resume = crate::potter_app_server_protocol::ProjectResumeResponse {
+            project_id: String::from("project_1"),
+            working_dir: temp.path().to_path_buf(),
+            project_dir: temp.path().join("project"),
+            progress_file_rel: PathBuf::from(".codexpotter/projects/2026/02/01/1/MAIN.md"),
+            progress_file: temp
+                .path()
+                .join(".codexpotter/projects/2026/02/01/1/MAIN.md"),
+            git_branch: None,
+            replay: crate::potter_app_server_protocol::ProjectResumeReplay {
+                completed_rounds: Vec::new(),
+            },
+            unfinished_round: Some(
+                crate::potter_app_server_protocol::ProjectResumeUnfinishedRound {
+                    round_current: 1,
+                    round_total: 1,
+                    pre_action_events: vec![
+                        EventMsg::PotterProjectStarted {
+                            user_message: Some(String::from("hello")),
+                            working_dir: temp.path().to_path_buf(),
+                            project_dir: temp.path().join("project"),
+                            user_prompt_file: PathBuf::from(
+                                ".codexpotter/projects/2026/02/01/1/MAIN.md",
+                            ),
+                        },
+                        EventMsg::PotterRoundStarted {
+                            current: 1,
+                            total: 1,
+                        },
+                        EventMsg::PotterRoundFinished {
+                            outcome: PotterRoundOutcome::Completed,
+                        },
+                    ],
+                    remaining_rounds_including_current: 1,
+                },
+            ),
+        };
+
+        let mut app_server = MockAppServer {
+            buffered_events: vec![
+                Event {
+                    id: String::new(),
+                    msg: EventMsg::PotterRoundFinished {
+                        outcome: PotterRoundOutcome::Completed,
+                    },
+                },
+                Event {
+                    id: String::new(),
+                    msg: EventMsg::PotterProjectCompleted {
+                        outcome: PotterProjectOutcome::BudgetExhausted,
+                    },
+                },
+            ],
+        };
         let mut ui = MockResumeUi::default();
 
         let exit = run_resume_with_deps(
             &mut ui,
-            &resolved,
-            ResumeRunOptions {
-                codex_bin: "codex".to_string(),
-                backend_launch: crate::app_server_backend::AppServerLaunchConfig {
-                    spawn_sandbox: None,
-                    thread_sandbox: None,
-                    bypass_approvals_and_sandbox: true,
-                },
-                codex_compat_home: None,
-                iterate_rounds: NonZeroUsize::new(1).expect("iterate rounds"),
-            },
+            &mut app_server,
+            resume,
+            NonZeroUsize::new(1).expect("iterate rounds"),
             &clock,
-            &round_runner,
         )
         .await
         .expect("run resume");
@@ -1316,9 +1219,9 @@ mod tests {
                 MockUiOp::RenderRound,
                 MockUiOp::PromptActionPicker(vec![String::from("Continue & iterate 1 more round")]),
                 MockUiOp::SetProjectStartedAt(continue_started_at),
+                MockUiOp::RenderRound,
             ]
         );
-        assert_eq!(round_runner.project_started_at(), vec![continue_started_at]);
     }
 
     #[test]
@@ -1601,6 +1504,26 @@ mod tests {
         let plans =
             build_round_replay_plans(&resolved, &potter_rollout_lines).expect("build plans");
         assert_eq!(plans.completed_rounds.len(), 1);
+        let round = plans.completed_rounds.first().expect("completed round");
+        assert_eq!(round.outcome, PotterRoundOutcome::Completed);
+        assert!(
+            matches!(
+                round.events.first(),
+                Some(EventMsg::PotterProjectStarted { .. })
+            ),
+            "unexpected first replay event: {:?}",
+            round.events.first(),
+        );
+        assert!(
+            matches!(
+                round.events.last(),
+                Some(EventMsg::PotterRoundFinished {
+                    outcome: PotterRoundOutcome::Completed
+                })
+            ),
+            "unexpected last replay event: {:?}",
+            round.events.last(),
+        );
 
         let unfinished = plans.unfinished_round.expect("unfinished round");
         assert_eq!(unfinished.project_started, None);

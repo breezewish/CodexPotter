@@ -348,6 +348,12 @@ impl PotterAppServerClient {
     }
 }
 
+impl crate::potter_project_render_loop::PotterEventSource for PotterAppServerClient {
+    fn read_next_event<'a>(&'a mut self) -> crate::round_runner::UiFuture<'a, Option<Event>> {
+        Box::pin(PotterAppServerClient::read_next_event(self))
+    }
+}
+
 async fn send_message<T: serde::Serialize>(stdin: &mut ChildStdin, msg: &T) -> anyhow::Result<()> {
     let json = serde_json::to_vec(&msg).context("serialize potter app-server JSON-RPC message")?;
     stdin

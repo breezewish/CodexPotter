@@ -1,3 +1,12 @@
+//! Upstream app-server protocol v2 payloads.
+//!
+//! This module contains request/response structs for v2 JSON-RPC methods (for example
+//! `thread/start`, `thread/resume`, `thread/rollback`, `turn/start`) and the configuration types
+//! they depend on.
+//!
+//! The shapes here intentionally mirror upstream Codex so the CLI can drive the `codex app-server`
+//! subprocess without depending on its internal Rust types.
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -10,6 +19,10 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 
+/// Upstream approval policy for agent tool executions.
+///
+/// CodexPotter typically sets this to [`AskForApproval::Never`] and handles any "approval"-like
+/// UX at a higher level.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum AskForApproval {
@@ -20,6 +33,10 @@ pub enum AskForApproval {
     Never,
 }
 
+/// CLI-selected sandbox mode hint sent to the upstream app-server.
+///
+/// The app-server resolves this into a concrete [`SandboxPolicy`] and echoes the result back in
+/// `thread/start` / `thread/resume` responses.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum SandboxMode {
@@ -52,6 +69,7 @@ pub struct FileChangeRequestApprovalResponse {
     pub decision: FileChangeApprovalDecision,
 }
 
+/// Network access configuration for external sandbox policies.
 #[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum NetworkAccess {
@@ -60,6 +78,7 @@ pub enum NetworkAccess {
     Enabled,
 }
 
+/// Concrete sandbox policy resolved by the upstream app-server.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum SandboxPolicy {
@@ -83,6 +102,9 @@ pub enum SandboxPolicy {
     },
 }
 
+/// Parameters for the `thread/start` JSON-RPC method.
+///
+/// Note: optional fields are intentionally serialized as `null` when unset to match upstream.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadStartParams {
@@ -98,6 +120,7 @@ pub struct ThreadStartParams {
     pub experimental_raw_events: bool,
 }
 
+/// Response payload for `thread/start`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadStartResponse {
@@ -110,6 +133,9 @@ pub struct ThreadStartResponse {
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
+/// Parameters for the `thread/resume` JSON-RPC method.
+///
+/// Note: optional fields are intentionally serialized as `null` when unset to match upstream.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadResumeParams {
@@ -124,6 +150,7 @@ pub struct ThreadResumeParams {
     pub developer_instructions: Option<String>,
 }
 
+/// Response payload for `thread/resume`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadResumeResponse {
@@ -136,6 +163,7 @@ pub struct ThreadResumeResponse {
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
+/// Upstream thread metadata returned by `thread/*` methods.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Thread {
@@ -161,6 +189,7 @@ pub struct ThreadRollbackResponse {
     pub thread: Thread,
 }
 
+/// Parameters for the `turn/start` JSON-RPC method.
 #[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnStartParams {
@@ -176,10 +205,12 @@ pub struct TurnStartParams {
     pub collaboration_mode: Option<JsonValue>,
 }
 
+/// Response payload for `turn/start`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnStartResponse {}
 
+/// Byte range into the prompt string, used to map UI placeholders.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ByteRange {
@@ -196,6 +227,7 @@ impl From<CoreByteRange> for ByteRange {
     }
 }
 
+/// Prompt metadata for UI placeholders (for example mentions).
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TextElement {
@@ -212,6 +244,10 @@ impl From<CoreTextElement> for TextElement {
     }
 }
 
+/// User input items passed to `turn/start`.
+///
+/// This is a JSON-RPC-friendly subset of [`codex_protocol::user_input::UserInput`]. Unknown
+/// variants are treated as a programmer error to surface protocol drift early.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum UserInput {

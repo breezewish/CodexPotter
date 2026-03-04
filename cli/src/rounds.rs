@@ -6,6 +6,9 @@
 
 use std::num::NonZeroUsize;
 
+/// Convert a non-zero round budget into the `u32` representation used by the app-server protocol.
+///
+/// Returns an error when the value cannot be represented as `u32` instead of silently clamping.
 pub fn round_budget_to_u32(rounds: NonZeroUsize) -> anyhow::Result<u32> {
     let rounds_usize = rounds.get();
     u32::try_from(rounds_usize).map_err(|_| {
@@ -14,6 +17,10 @@ pub fn round_budget_to_u32(rounds: NonZeroUsize) -> anyhow::Result<u32> {
     })
 }
 
+/// Convert a `usize` value into `u32`, producing diagnostics that mention `label`.
+///
+/// This is useful when internal counts are tracked as `usize` but must be sent over the wire as
+/// `u32`.
 pub fn usize_to_u32(value: usize, label: &'static str) -> anyhow::Result<u32> {
     u32::try_from(value).map_err(|_| {
         let max = u32::MAX;

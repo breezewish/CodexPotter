@@ -1,3 +1,9 @@
+//! Common request/notification shapes for upstream `codex app-server`.
+//!
+//! The protocol is modeled as JSON objects tagged by the `"method"` field.
+//! - This module defines the top-level enums for those `"method"` tags.
+//! - Version-specific parameter structs live in [`super::v1`] / [`super::v2`].
+
 use serde::Deserialize;
 use serde::Serialize;
 

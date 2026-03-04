@@ -1,3 +1,14 @@
+//! Test-only JSONL round UI implementation.
+//!
+//! This module provides [`ExecJsonRoundUi`], a [`crate::workflow::round_runner::PotterRoundUi`]
+//! implementation that writes [`crate::exec::ExecJsonlEvent`] values to an arbitrary [`Write`]
+//! sink as newline-delimited JSON.
+//!
+//! It is used by unit tests to validate a few important invariants for non-interactive runners:
+//! - interactive requests are treated as fatal
+//! - fatal exits still produce well-formed "turn failed" / "round completed" closure events
+//! - queued events are drained before synthesized closure events are emitted
+
 use std::io::Write;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -13,6 +24,13 @@ use codex_protocol::user_input::UserInput;
 use codex_tui::AppExitInfo;
 use codex_tui::ExitReason;
 
+/// A headless round renderer that emits `exec --json` JSONL events.
+///
+/// This is a small wrapper around [`crate::exec::ExecJsonlEventProcessor`]:
+/// - incoming `EventMsg` values are mapped into zero-or-more [`crate::exec::ExecJsonlEvent`]
+/// - mapped events are written as JSONL
+/// - on fatal exits, the emitter synthesizes "turn failed" / "round completed" events so
+///   downstream consumers always observe a well-formed closure
 pub struct ExecJsonRoundUi<W: Write> {
     output: W,
     processor: crate::exec::ExecJsonlEventProcessor,
@@ -23,6 +41,10 @@ pub struct ExecJsonRoundUi<W: Write> {
 }
 
 impl<W: Write> ExecJsonRoundUi<W> {
+    /// Create a new JSONL round UI that writes to `output`.
+    ///
+    /// `workdir` is used to initialize the event processor so file paths in emitted events are
+    /// stable and consistent with the CLI's working directory.
     pub fn new(output: W, workdir: PathBuf) -> Self {
         Self {
             output,
@@ -34,6 +56,7 @@ impl<W: Write> ExecJsonRoundUi<W> {
         }
     }
 
+    /// Consume the UI and return the underlying output sink.
     pub fn into_output(self) -> W {
         self.output
     }

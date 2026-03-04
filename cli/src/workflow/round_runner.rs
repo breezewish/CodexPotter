@@ -7,7 +7,6 @@ use anyhow::Context;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
-use codex_protocol::protocol::PotterRoundOutcome;
 use codex_tui::ExitReason;
 use tokio::sync::mpsc::unbounded_channel;
 
@@ -253,94 +252,37 @@ async fn run_potter_round_inner(
 
     let forwarder = {
         let ui_event_tx = ui_event_tx.clone();
-        let workdir = context.workdir.clone();
-        let progress_file_rel = context.progress_file_rel.clone();
-        let user_prompt_file = context.user_prompt_file.clone();
-        let git_commit_start = context.git_commit_start.clone();
         let potter_rollout_path = context.potter_rollout_path.clone();
         let fatal_exit_tx = fatal_exit_tx.clone();
-        let project_started_at = context.project_started_at;
+        let mut bridge = super::round_event_bridge::PotterRoundEventBridge::new(
+            super::round_event_bridge::PotterRoundEventBridgeConfig {
+                record_round_configured,
+                workdir: context.workdir.clone(),
+                progress_file_rel: context.progress_file_rel.clone(),
+                user_prompt_file: context.user_prompt_file.clone(),
+                git_commit_start: context.git_commit_start.clone(),
+                potter_rollout_path: potter_rollout_path.clone(),
+                project_started_at: context.project_started_at,
+                project_succeeded_rounds,
+            },
+        );
 
         tokio::spawn(async move {
-            let mut has_recorded_round_configured = !record_round_configured;
             while let Some(event) = backend_event_rx.recv().await {
-                if !has_recorded_round_configured
-                    && let EventMsg::SessionConfigured(cfg) = &event.msg
-                {
-                    has_recorded_round_configured = true;
-                    let (rollout_path, rollout_path_raw, rollout_base_dir) =
-                        crate::workflow::rollout::resolve_rollout_path_for_recording(
-                            cfg.rollout_path.clone(),
-                            &workdir,
-                        );
-                    if let Err(err) = crate::workflow::rollout::append_line(
-                        &potter_rollout_path,
-                        &crate::workflow::rollout::PotterRolloutLine::RoundConfigured {
-                            thread_id: cfg.session_id,
-                            rollout_path,
-                            rollout_path_raw,
-                            rollout_base_dir,
-                        },
-                    ) {
+                let injected = match bridge.observe_backend_event(&event) {
+                    Ok(injected) => injected,
+                    Err(err) => {
                         let _ = fatal_exit_tx.send(format!(
                             "failed to write {}: {err:#}",
                             potter_rollout_path.display()
                         ));
                         break;
                     }
-                }
+                };
 
-                if matches!(
-                    &event.msg,
-                    EventMsg::PotterRoundFinished {
-                        outcome: PotterRoundOutcome::Completed
-                    }
-                ) && crate::workflow::project::progress_file_has_finite_incantatem_true(
-                    &workdir,
-                    &progress_file_rel,
-                )
-                .unwrap_or(false)
+                if let Some(injected) = injected
+                    && ui_event_tx.send(injected).is_err()
                 {
-                    if let Err(err) = crate::workflow::rollout::append_line(
-                        &potter_rollout_path,
-                        &crate::workflow::rollout::PotterRolloutLine::ProjectSucceeded {
-                            rounds: project_succeeded_rounds,
-                            duration_secs: project_started_at.elapsed().as_secs(),
-                            user_prompt_file: user_prompt_file.clone(),
-                            git_commit_start: git_commit_start.clone(),
-                            git_commit_end: crate::workflow::project::resolve_git_commit(&workdir),
-                        },
-                    ) {
-                        let _ = fatal_exit_tx.send(format!(
-                            "failed to write {}: {err:#}",
-                            potter_rollout_path.display()
-                        ));
-                        break;
-                    }
-                    let _ = ui_event_tx.send(Event {
-                        id: "".to_string(),
-                        msg: EventMsg::PotterProjectSucceeded {
-                            rounds: project_succeeded_rounds,
-                            duration: project_started_at.elapsed(),
-                            user_prompt_file: user_prompt_file.clone(),
-                            git_commit_start: git_commit_start.clone(),
-                            git_commit_end: crate::workflow::project::resolve_git_commit(&workdir),
-                        },
-                    });
-                }
-
-                if let EventMsg::PotterRoundFinished { outcome } = &event.msg
-                    && let Err(err) = crate::workflow::rollout::append_line(
-                        &potter_rollout_path,
-                        &crate::workflow::rollout::PotterRolloutLine::RoundFinished {
-                            outcome: outcome.clone(),
-                        },
-                    )
-                {
-                    let _ = fatal_exit_tx.send(format!(
-                        "failed to write {}: {err:#}",
-                        potter_rollout_path.display()
-                    ));
                     break;
                 }
 

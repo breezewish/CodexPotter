@@ -83,6 +83,17 @@ enum InternalEvent {
     ProjectFinished { project_id: String },
 }
 
+fn decode_jsonrpc_message_line(line: &str) -> anyhow::Result<Option<JSONRPCMessage>> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+
+    let msg: JSONRPCMessage = serde_json::from_str(trimmed)
+        .with_context(|| format!("decode potter app-server JSON-RPC: {trimmed:?}"))?;
+    Ok(Some(msg))
+}
+
 pub async fn run_potter_app_server(config: PotterAppServerConfig) -> anyhow::Result<()> {
     tokio::task::LocalSet::new()
         .run_until(run_potter_app_server_inner(config))
@@ -127,13 +138,14 @@ async fn run_potter_app_server_inner(config: PotterAppServerConfig) -> anyhow::R
                 let Some(line) = maybe_line.context("read potter app-server stdin line")? else {
                     break;
                 };
-                if line.trim().is_empty() {
-                    continue;
-                }
 
-                let msg: JSONRPCMessage = match serde_json::from_str(&line) {
-                    Ok(msg) => msg,
-                    Err(_) => continue,
+                let msg = match decode_jsonrpc_message_line(&line) {
+                    Ok(Some(msg)) => msg,
+                    Ok(None) => continue,
+                    Err(err) => {
+                        eprintln!("warning: {err:#}");
+                        continue;
+                    }
                 };
                 handle_jsonrpc_message(msg, &mut state, &writer_tx, &internal_tx).await;
             }
@@ -1512,6 +1524,24 @@ mod tests {
 
     use pretty_assertions::assert_eq;
     use tokio::sync::mpsc::UnboundedReceiver;
+
+    #[test]
+    fn decode_jsonrpc_message_line_errors_on_invalid_json() {
+        let err = decode_jsonrpc_message_line("{not json").expect_err("should fail");
+        assert!(
+            err.to_string()
+                .contains("decode potter app-server JSON-RPC")
+        );
+    }
+
+    #[test]
+    fn decode_jsonrpc_message_line_ignores_empty_lines() {
+        assert!(
+            decode_jsonrpc_message_line(" \t ")
+                .expect("decode")
+                .is_none()
+        );
+    }
 
     #[tokio::test]
     async fn start_rounds_without_resumed_project_returns_jsonrpc_error() {

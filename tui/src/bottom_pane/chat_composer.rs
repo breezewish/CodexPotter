@@ -83,13 +83,6 @@
 //! - [`ChatComposer::flush_paste_burst_if_due`]/[`ChatComposer::handle_paste_burst_flush`]: called
 //!   from UI ticks to turn a pending burst into either an explicit paste (`handle_paste`) or a
 //!   normal typed character.
-//!
-//! # Input Disabled Mode
-//!
-//! The composer can be temporarily read-only (`input_enabled = false`). In that mode it ignores
-//! edits and renders a placeholder prompt instead of the editable textarea. This is part of the
-//! overall state machine, since it affects which transitions are even possible from a given UI
-//! state.
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::key_hint::has_ctrl_or_alt;
@@ -199,9 +192,6 @@ pub struct ChatComposer {
     pending_pastes: Vec<(String, String)>,
     large_paste_counters: HashMap<usize, usize>,
     placeholder_text: String,
-    /// When false, the composer is temporarily read-only (e.g. during sandbox setup).
-    input_enabled: bool,
-    input_disabled_placeholder: Option<String>,
     /// Non-bracketed paste burst tracker (see `bottom_pane/paste_burst.rs`).
     paste_burst: PasteBurst,
     // When true, disables paste-burst logic and inserts characters immediately.
@@ -249,8 +239,6 @@ impl ChatComposer {
             pending_pastes: Vec::new(),
             large_paste_counters: HashMap::new(),
             placeholder_text,
-            input_enabled: true,
-            input_disabled_placeholder: None,
             paste_burst: PasteBurst::default(),
             disable_paste_burst: false,
             footer_mode: FooterMode::ShortcutSummary,
@@ -681,10 +669,6 @@ impl ChatComposer {
 
     /// Handle a key event coming from the main UI.
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
-        if !self.input_enabled {
-            return (InputResult::None, false);
-        }
-
         let result = match &mut self.active_popup {
             ActivePopup::Command(_) => self.handle_key_event_with_slash_popup(key_event),
             ActivePopup::File(_) => self.handle_key_event_with_file_popup(key_event),
@@ -1894,25 +1878,10 @@ impl ChatComposer {
         self.current_file_query = (!query.is_empty()).then_some(query);
         self.dismissed_file_popup_token = None;
     }
-
-    #[allow(dead_code)]
-    pub fn set_input_enabled(&mut self, enabled: bool, placeholder: Option<String>) {
-        self.input_enabled = enabled;
-        self.input_disabled_placeholder = if enabled { None } else { placeholder };
-
-        // Avoid leaving interactive popups open while input is blocked.
-        if !enabled && !matches!(self.active_popup, ActivePopup::None) {
-            self.active_popup = ActivePopup::None;
-        }
-    }
 }
 
 impl Renderable for ChatComposer {
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        if !self.input_enabled {
-            return None;
-        }
-
         if matches!(&self.active_popup, ActivePopup::Selection(_)) {
             return None;
         }
@@ -2006,11 +1975,7 @@ impl Renderable for ChatComposer {
         let style = user_message_style();
         Block::default().style(style).render_ref(composer_rect, buf);
         if !textarea_rect.is_empty() {
-            let prompt = if self.input_enabled {
-                "›".bold()
-            } else {
-                "›".dim()
-            };
+            let prompt = "›".bold();
             buf.set_span(
                 textarea_rect.x - LIVE_PREFIX_COLS,
                 textarea_rect.y,
@@ -2022,15 +1987,7 @@ impl Renderable for ChatComposer {
         let mut state = self.textarea_state.borrow_mut();
         StatefulWidgetRef::render_ref(&(&self.textarea), textarea_rect, buf, &mut state);
         if self.textarea.text().is_empty() {
-            let text = if self.input_enabled {
-                self.placeholder_text.as_str().to_string()
-            } else {
-                self.input_disabled_placeholder
-                    .as_deref()
-                    .unwrap_or("Input disabled.")
-                    .to_string()
-            };
-            let placeholder = Span::from(text).dim();
+            let placeholder = self.placeholder_text.as_str().dim();
             Line::from(vec![placeholder]).render_ref(textarea_rect.inner(Margin::new(0, 0)), buf);
         }
     }
@@ -3486,41 +3443,6 @@ End of payload.";
             "hello".to_string(),
             "placeholder should expand to actual text"
         );
-    }
-
-    #[test]
-    fn input_disabled_ignores_keypresses_and_hides_cursor() {
-        use crossterm::event::KeyCode;
-        use crossterm::event::KeyEvent;
-        use crossterm::event::KeyModifiers;
-
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            true,
-            sender,
-            false,
-            "Assign new task to CodexPotter".to_string(),
-            false,
-        );
-
-        composer.set_text_content("hello".to_string());
-        composer.set_input_enabled(false, Some("Input disabled for test.".to_string()));
-
-        let (result, needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
-
-        assert_eq!(result, InputResult::None);
-        assert!(!needs_redraw);
-        assert_eq!(composer.current_text(), "hello");
-
-        let area = Rect {
-            x: 0,
-            y: 0,
-            width: 40,
-            height: 5,
-        };
-        assert_eq!(composer.cursor_pos(area), None);
     }
 
     #[test]

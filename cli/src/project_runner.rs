@@ -248,15 +248,17 @@ mod tests {
     #[derive(Debug, Default)]
     struct MockUi {
         queued_prompts: VecDeque<String>,
+        prompt_user_responses: VecDeque<Option<String>>,
         prompt_user_calls: usize,
         clear_calls: usize,
         project_started_at_calls: usize,
     }
 
     impl MockUi {
-        fn new(queued_prompts: Vec<String>) -> Self {
+        fn new(queued_prompts: Vec<String>, prompt_user_responses: Vec<Option<String>>) -> Self {
             Self {
                 queued_prompts: VecDeque::from(queued_prompts),
+                prompt_user_responses: VecDeque::from(prompt_user_responses),
                 prompt_user_calls: 0,
                 clear_calls: 0,
                 project_started_at_calls: 0,
@@ -321,7 +323,11 @@ mod tests {
             _prompt_footer: codex_tui::PromptFooterContext,
         ) -> UiFuture<'a, Option<String>> {
             self.prompt_user_calls += 1;
-            Box::pin(async { Ok(None) })
+            let response = self
+                .prompt_user_responses
+                .pop_front()
+                .expect("prompt_user response");
+            Box::pin(async move { Ok(response) })
         }
 
         fn pop_queued_user_prompt(&mut self) -> Option<String> {
@@ -429,7 +435,7 @@ mod tests {
     #[tokio::test]
     async fn drains_queued_prompts_without_prompting_user() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let mut ui = MockUi::new(vec![String::from("one"), String::from("two")]);
+        let mut ui = MockUi::new(vec![String::from("one"), String::from("two")], Vec::new());
         let mut app_server = MockAppServer::default();
         let clock = TestClock;
 
@@ -455,5 +461,59 @@ mod tests {
         assert_eq!(ui.prompt_user_calls, 0);
         assert_eq!(ui.clear_calls, 0);
         assert_eq!(ui.queued_prompts, VecDeque::<String>::new());
+    }
+
+    #[tokio::test]
+    async fn prompts_user_when_queue_empty() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut ui = MockUi::new(Vec::new(), vec![Some(String::from("hello")), None]);
+        let mut app_server = MockAppServer::default();
+        let clock = TestClock;
+
+        let exit = run_project_queue_with_deps(
+            &mut ui,
+            &mut app_server,
+            temp.path().to_path_buf(),
+            ProjectQueueOptions {
+                allow_prompt_user: true,
+                rounds: NonZeroUsize::new(1).expect("rounds"),
+                turn_prompt: String::from("Continue"),
+            },
+            &clock,
+        )
+        .await
+        .expect("run project queue");
+
+        assert_eq!(exit, ProjectQueueExit::Completed);
+        assert_eq!(app_server.started_prompts(), vec![String::from("hello")]);
+        assert_eq!(ui.prompt_user_calls, 2);
+        assert_eq!(ui.clear_calls, 1);
+    }
+
+    #[tokio::test]
+    async fn prompts_user_after_draining_queue() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut ui = MockUi::new(vec![String::from("one")], vec![None]);
+        let mut app_server = MockAppServer::default();
+        let clock = TestClock;
+
+        let exit = run_project_queue_with_deps(
+            &mut ui,
+            &mut app_server,
+            temp.path().to_path_buf(),
+            ProjectQueueOptions {
+                allow_prompt_user: true,
+                rounds: NonZeroUsize::new(1).expect("rounds"),
+                turn_prompt: String::from("Continue"),
+            },
+            &clock,
+        )
+        .await
+        .expect("run project queue");
+
+        assert_eq!(exit, ProjectQueueExit::Completed);
+        assert_eq!(app_server.started_prompts(), vec![String::from("one")]);
+        assert_eq!(ui.prompt_user_calls, 1);
+        assert_eq!(ui.clear_calls, 0);
     }
 }

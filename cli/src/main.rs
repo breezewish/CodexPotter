@@ -241,7 +241,7 @@ async fn main() -> anyhow::Result<()> {
         maybe_prompt_global_gitignore(&mut ui, &workdir, plan).await;
     }
 
-    let mut project_queue_allow_prompt_user = true;
+    let project_queue_allow_prompt_user = true;
     let mut project_queue_workdir = workdir.clone();
 
     let mut potter_app_server = crate::potter_app_server_client::PotterAppServerClient::spawn(
@@ -323,7 +323,6 @@ async fn main() -> anyhow::Result<()> {
                     std::process::exit(1);
                 }
             }
-            project_queue_allow_prompt_user = false;
             project_queue_workdir =
                 std::env::current_dir().context("resolve current directory after resume")?;
         }

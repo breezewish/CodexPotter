@@ -204,6 +204,8 @@ async fn handle_request(
         }
     };
 
+    clear_finished_running_project(state);
+
     match parsed {
         PotterAppServerClientRequest::Initialize { request_id, .. } => {
             send_response(writer_tx, request_id, serde_json::json!({}));
@@ -271,6 +273,16 @@ async fn handle_request(
     }
 
     Ok(())
+}
+
+fn clear_finished_running_project(state: &mut ServerState) {
+    if state
+        .running
+        .as_ref()
+        .is_some_and(|running| running.handle.is_finished())
+    {
+        state.running = None;
+    }
 }
 
 fn project_list(
@@ -1706,6 +1718,44 @@ mod tests {
         let running = state.running.take().expect("running project");
         running.handle.abort();
         let _ = running.handle.await;
+    }
+
+    #[tokio::test]
+    async fn clear_finished_running_project_drops_stale_state() {
+        let temp = tempfile::tempdir().expect("tempdir");
+
+        let config = PotterAppServerConfig {
+            default_workdir: temp.path().to_path_buf(),
+            codex_bin: "codex".to_string(),
+            backend_launch: crate::app_server_backend::AppServerLaunchConfig {
+                spawn_sandbox: None,
+                thread_sandbox: None,
+                bypass_approvals_and_sandbox: false,
+            },
+            codex_compat_home: None,
+            rounds: NonZeroUsize::new(1).expect("nonzero rounds"),
+        };
+
+        let handle = tokio::spawn(async {});
+
+        let mut state = ServerState {
+            config,
+            running: Some(RunningProject {
+                project_id: "project_1".to_string(),
+                handle,
+            }),
+            resumed: None,
+        };
+
+        tokio::task::yield_now().await;
+
+        clear_finished_running_project(&mut state);
+
+        assert!(
+            state.running.is_none(),
+            "expected running state to be cleared for finished tasks; got {:?}",
+            state.running
+        );
     }
 
     fn drain_potter_events(mut writer_rx: UnboundedReceiver<JSONRPCMessage>) -> Vec<Event> {

@@ -191,6 +191,15 @@ pub enum EventMsg {
         git_commit_end: String,
     },
 
+    /// `codex-potter` project completed (outside of the app-server protocol).
+    ///
+    /// This marker is emitted exactly once at the end of a project run so clients can exit a
+    /// project-level render loop without having to re-implement CodexPotter's multi-round
+    /// stop conditions.
+    PotterProjectCompleted {
+        outcome: PotterProjectOutcome,
+    },
+
     WebSearchEnd(WebSearchEndEvent),
 
     /// Notification that the server is about to execute a command.
@@ -254,6 +263,15 @@ pub enum EventMsg {
 pub enum PotterRoundOutcome {
     Completed,
     UserRequested,
+    TaskFailed { message: String },
+    Fatal { message: String },
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PotterProjectOutcome {
+    Succeeded,
+    BudgetExhausted,
     TaskFailed { message: String },
     Fatal { message: String },
 }

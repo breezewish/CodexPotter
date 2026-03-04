@@ -448,13 +448,7 @@ async fn spawn_app_server(
     }
     if let Some(mode) = launch.spawn_sandbox {
         cmd.arg("--sandbox");
-        cmd.arg(match mode {
-            crate::app_server::upstream_protocol::SandboxMode::ReadOnly => "read-only",
-            crate::app_server::upstream_protocol::SandboxMode::WorkspaceWrite => "workspace-write",
-            crate::app_server::upstream_protocol::SandboxMode::DangerFullAccess => {
-                "danger-full-access"
-            }
-        });
+        cmd.arg(super::sandbox_mode_cli_arg(mode));
     }
 
     let mut child = cmd

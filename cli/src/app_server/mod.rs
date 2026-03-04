@@ -13,3 +13,11 @@ pub use codex_backend::AppServerBackendConfig;
 pub use codex_backend::AppServerEventMode;
 pub use codex_backend::AppServerLaunchConfig;
 pub use codex_backend::run_app_server_backend;
+
+fn sandbox_mode_cli_arg(mode: upstream_protocol::SandboxMode) -> &'static str {
+    match mode {
+        upstream_protocol::SandboxMode::ReadOnly => "read-only",
+        upstream_protocol::SandboxMode::WorkspaceWrite => "workspace-write",
+        upstream_protocol::SandboxMode::DangerFullAccess => "danger-full-access",
+    }
+}

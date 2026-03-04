@@ -1,8 +1,8 @@
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::app_server_protocol::JSONRPCRequest;
-use crate::app_server_protocol::RequestId;
+use crate::app_server::upstream_protocol::JSONRPCRequest;
+use crate::app_server::upstream_protocol::RequestId;
 
 use super::v1;
 use super::v2;
@@ -124,7 +124,7 @@ mod tests {
                 model: None,
                 model_provider: None,
                 cwd: None,
-                approval_policy: Some(crate::app_server_protocol::AskForApproval::Never),
+                approval_policy: Some(crate::app_server::upstream_protocol::AskForApproval::Never),
                 sandbox: None,
                 config: None,
                 base_instructions: None,
@@ -166,7 +166,7 @@ mod tests {
                 model: None,
                 model_provider: None,
                 cwd: None,
-                approval_policy: Some(crate::app_server_protocol::AskForApproval::Never),
+                approval_policy: Some(crate::app_server::upstream_protocol::AskForApproval::Never),
                 sandbox: None,
                 config: None,
                 base_instructions: None,

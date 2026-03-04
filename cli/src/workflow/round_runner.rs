@@ -44,8 +44,8 @@ impl PotterRoundUi for codex_tui::CodexPotterTui {
 pub struct PotterRoundContext {
     pub codex_bin: String,
     pub developer_prompt: String,
-    pub backend_launch: crate::app_server_backend::AppServerLaunchConfig,
-    pub backend_event_mode: crate::app_server_backend::AppServerEventMode,
+    pub backend_launch: crate::app_server::AppServerLaunchConfig,
+    pub backend_event_mode: crate::app_server::AppServerEventMode,
     pub codex_compat_home: Option<PathBuf>,
     pub thread_cwd: Option<PathBuf>,
     pub turn_prompt: String,
@@ -212,9 +212,9 @@ async fn run_potter_round_inner(
                 user_prompt_file: project_started.user_prompt_file.clone(),
             },
         });
-        crate::potter_rollout::append_line(
+        crate::workflow::rollout::append_line(
             &context.potter_rollout_path,
-            &crate::potter_rollout::PotterRolloutLine::ProjectStarted {
+            &crate::workflow::rollout::PotterRolloutLine::ProjectStarted {
                 user_message: project_started.user_message,
                 user_prompt_file: project_started.user_prompt_file,
             },
@@ -231,9 +231,9 @@ async fn run_potter_round_inner(
             },
         });
         if record_round_started {
-            crate::potter_rollout::append_line(
+            crate::workflow::rollout::append_line(
                 &context.potter_rollout_path,
-                &crate::potter_rollout::PotterRolloutLine::RoundStarted {
+                &crate::workflow::rollout::PotterRolloutLine::RoundStarted {
                     current: round_current,
                     total: round_total,
                 },
@@ -269,13 +269,13 @@ async fn run_potter_round_inner(
                 {
                     has_recorded_round_configured = true;
                     let (rollout_path, rollout_path_raw, rollout_base_dir) =
-                        crate::potter_rollout::resolve_rollout_path_for_recording(
+                        crate::workflow::rollout::resolve_rollout_path_for_recording(
                             cfg.rollout_path.clone(),
                             &workdir,
                         );
-                    if let Err(err) = crate::potter_rollout::append_line(
+                    if let Err(err) = crate::workflow::rollout::append_line(
                         &potter_rollout_path,
-                        &crate::potter_rollout::PotterRolloutLine::RoundConfigured {
+                        &crate::workflow::rollout::PotterRolloutLine::RoundConfigured {
                             thread_id: cfg.session_id,
                             rollout_path,
                             rollout_path_raw,
@@ -295,20 +295,20 @@ async fn run_potter_round_inner(
                     EventMsg::PotterRoundFinished {
                         outcome: PotterRoundOutcome::Completed
                     }
-                ) && crate::project::progress_file_has_finite_incantatem_true(
+                ) && crate::workflow::project::progress_file_has_finite_incantatem_true(
                     &workdir,
                     &progress_file_rel,
                 )
                 .unwrap_or(false)
                 {
-                    if let Err(err) = crate::potter_rollout::append_line(
+                    if let Err(err) = crate::workflow::rollout::append_line(
                         &potter_rollout_path,
-                        &crate::potter_rollout::PotterRolloutLine::ProjectSucceeded {
+                        &crate::workflow::rollout::PotterRolloutLine::ProjectSucceeded {
                             rounds: project_succeeded_rounds,
                             duration_secs: project_started_at.elapsed().as_secs(),
                             user_prompt_file: user_prompt_file.clone(),
                             git_commit_start: git_commit_start.clone(),
-                            git_commit_end: crate::project::resolve_git_commit(&workdir),
+                            git_commit_end: crate::workflow::project::resolve_git_commit(&workdir),
                         },
                     ) {
                         let _ = fatal_exit_tx.send(format!(
@@ -324,15 +324,15 @@ async fn run_potter_round_inner(
                             duration: project_started_at.elapsed(),
                             user_prompt_file: user_prompt_file.clone(),
                             git_commit_start: git_commit_start.clone(),
-                            git_commit_end: crate::project::resolve_git_commit(&workdir),
+                            git_commit_end: crate::workflow::project::resolve_git_commit(&workdir),
                         },
                     });
                 }
 
                 if let EventMsg::PotterRoundFinished { outcome } = &event.msg
-                    && let Err(err) = crate::potter_rollout::append_line(
+                    && let Err(err) = crate::workflow::rollout::append_line(
                         &potter_rollout_path,
-                        &crate::potter_rollout::PotterRolloutLine::RoundFinished {
+                        &crate::workflow::rollout::PotterRolloutLine::RoundFinished {
                             outcome: outcome.clone(),
                         },
                     )
@@ -351,8 +351,8 @@ async fn run_potter_round_inner(
         })
     };
 
-    let backend = tokio::spawn(crate::app_server_backend::run_app_server_backend(
-        crate::app_server_backend::AppServerBackendConfig {
+    let backend = tokio::spawn(crate::app_server::run_app_server_backend(
+        crate::app_server::AppServerBackendConfig {
             codex_bin: context.codex_bin.clone(),
             developer_instructions: Some(context.developer_prompt.clone()),
             launch: context.backend_launch,
@@ -370,7 +370,7 @@ async fn run_potter_round_inner(
     let status_header_prefix = Some(format!("Round {round_current}/{round_total}"));
     let prompt_footer = codex_tui::PromptFooterContext::new(
         context.workdir.clone(),
-        crate::project::resolve_git_branch(&context.workdir),
+        crate::workflow::project::resolve_git_branch(&context.workdir),
     );
     let exit_info = ui
         .render_round(codex_tui::RenderRoundParams {
@@ -404,11 +404,12 @@ async fn run_potter_round_inner(
         .context("app-server render backend panicked")??;
     let _ = forwarder.await;
 
-    let stop_due_to_finite_incantatem = crate::project::progress_file_has_finite_incantatem_true(
-        &context.workdir,
-        &context.progress_file_rel,
-    )
-    .context("check progress file finite_incantatem")?;
+    let stop_due_to_finite_incantatem =
+        crate::workflow::project::progress_file_has_finite_incantatem_true(
+            &context.workdir,
+            &context.progress_file_rel,
+        )
+        .context("check progress file finite_incantatem")?;
 
     Ok(PotterRoundResult {
         exit_reason,

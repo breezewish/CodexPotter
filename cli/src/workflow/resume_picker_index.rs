@@ -50,9 +50,9 @@ pub fn discover_resumable_projects(workdir: &Path) -> anyhow::Result<Vec<ResumeP
 }
 
 fn row_for_progress_file(workdir: &Path, progress_file: &Path) -> Option<ResumePickerRow> {
-    let resolved = crate::resume::resolve_project_paths(workdir, progress_file).ok()?;
+    let resolved = crate::workflow::resume::resolve_project_paths(workdir, progress_file).ok()?;
 
-    let potter_rollout_path = crate::potter_rollout::potter_rollout_path(&resolved.project_dir);
+    let potter_rollout_path = crate::workflow::rollout::potter_rollout_path(&resolved.project_dir);
     if !potter_rollout_path.exists() || !potter_rollout_path.is_file() {
         return None;
     }
@@ -65,20 +65,22 @@ fn row_for_progress_file(workdir: &Path, progress_file: &Path) -> Option<ResumeP
     )
     .unwrap_or(updated_at);
 
-    let potter_rollout_lines = crate::potter_rollout::read_lines(&potter_rollout_path).ok()?;
+    let potter_rollout_lines = crate::workflow::rollout::read_lines(&potter_rollout_path).ok()?;
     if potter_rollout_lines.is_empty() {
         return None;
     }
 
     let index =
-        crate::potter_rollout_resume_index::build_resume_index(&potter_rollout_lines).ok()?;
+        crate::workflow::rollout_resume_index::build_resume_index(&potter_rollout_lines).ok()?;
 
     if !all_referenced_rollouts_exist(&resolved.workdir, &index) {
         return None;
     }
 
-    let short_title = crate::project::progress_file_short_title(&resolved.progress_file).ok()?;
-    let git_branch = crate::project::progress_file_git_branch(&resolved.progress_file).ok()?;
+    let short_title =
+        crate::workflow::project::progress_file_short_title(&resolved.progress_file).ok()?;
+    let git_branch =
+        crate::workflow::project::progress_file_git_branch(&resolved.progress_file).ok()?;
 
     let user_request = match short_title {
         Some(title) => title,
@@ -149,7 +151,7 @@ fn created_at_from_progress_file(projects_root: &Path, progress_file: &Path) -> 
 
 fn all_referenced_rollouts_exist(
     workdir: &Path,
-    index: &crate::potter_rollout_resume_index::PotterRolloutResumeIndex,
+    index: &crate::workflow::rollout_resume_index::PotterRolloutResumeIndex,
 ) -> bool {
     let mut all_paths = Vec::new();
     for round in &index.completed_rounds {
@@ -223,7 +225,8 @@ git_branch: "{git_branch}"
     ) {
         std::fs::write(upstream_rollout_path, "").expect("write upstream rollout");
 
-        let potter_rollout_path = project_dir.join(crate::potter_rollout::POTTER_ROLLOUT_FILENAME);
+        let potter_rollout_path =
+            project_dir.join(crate::workflow::rollout::POTTER_ROLLOUT_FILENAME);
         let main_rel = project_dir
             .join("MAIN.md")
             .strip_prefix(workdir)
@@ -234,25 +237,25 @@ git_branch: "{git_branch}"
             codex_protocol::ThreadId::from_string("019ca423-63d9-7641-ae83-db060ad3c000")
                 .expect("thread id");
 
-        crate::potter_rollout::append_line(
+        crate::workflow::rollout::append_line(
             &potter_rollout_path,
-            &crate::potter_rollout::PotterRolloutLine::ProjectStarted {
+            &crate::workflow::rollout::PotterRolloutLine::ProjectStarted {
                 user_message: user_message.map(ToOwned::to_owned),
                 user_prompt_file: main_rel,
             },
         )
         .expect("append project_started");
-        crate::potter_rollout::append_line(
+        crate::workflow::rollout::append_line(
             &potter_rollout_path,
-            &crate::potter_rollout::PotterRolloutLine::RoundStarted {
+            &crate::workflow::rollout::PotterRolloutLine::RoundStarted {
                 current: 1,
                 total: 10,
             },
         )
         .expect("append round_started");
-        crate::potter_rollout::append_line(
+        crate::workflow::rollout::append_line(
             &potter_rollout_path,
-            &crate::potter_rollout::PotterRolloutLine::RoundConfigured {
+            &crate::workflow::rollout::PotterRolloutLine::RoundConfigured {
                 thread_id,
                 rollout_path: upstream_rollout_path.to_path_buf(),
                 rollout_path_raw: None,
@@ -352,7 +355,7 @@ git_branch: "{git_branch}"
             main_empty
                 .parent()
                 .expect("project dir")
-                .join(crate::potter_rollout::POTTER_ROLLOUT_FILENAME),
+                .join(crate::workflow::rollout::POTTER_ROLLOUT_FILENAME),
             "",
         )
         .expect("write empty rollout");
@@ -364,7 +367,7 @@ git_branch: "{git_branch}"
             main_unknown_schema
                 .parent()
                 .expect("project dir")
-                .join(crate::potter_rollout::POTTER_ROLLOUT_FILENAME),
+                .join(crate::workflow::rollout::POTTER_ROLLOUT_FILENAME),
             r#"{"type":"session_started","user_message":"hello","user_prompt_file":"MAIN.md"}"#,
         )
         .expect("write unknown schema rollout");
@@ -376,7 +379,7 @@ git_branch: "{git_branch}"
         let potter_rollout_path = main_missing_upstream
             .parent()
             .expect("project dir")
-            .join(crate::potter_rollout::POTTER_ROLLOUT_FILENAME);
+            .join(crate::workflow::rollout::POTTER_ROLLOUT_FILENAME);
         let main_rel = main_missing_upstream
             .strip_prefix(workdir)
             .expect("strip_prefix")
@@ -384,25 +387,25 @@ git_branch: "{git_branch}"
         let thread_id =
             codex_protocol::ThreadId::from_string("019ca423-63d9-7641-ae83-db060ad3c000")
                 .expect("thread id");
-        crate::potter_rollout::append_line(
+        crate::workflow::rollout::append_line(
             &potter_rollout_path,
-            &crate::potter_rollout::PotterRolloutLine::ProjectStarted {
+            &crate::workflow::rollout::PotterRolloutLine::ProjectStarted {
                 user_message: Some("hello".to_string()),
                 user_prompt_file: main_rel,
             },
         )
         .expect("append project_started");
-        crate::potter_rollout::append_line(
+        crate::workflow::rollout::append_line(
             &potter_rollout_path,
-            &crate::potter_rollout::PotterRolloutLine::RoundStarted {
+            &crate::workflow::rollout::PotterRolloutLine::RoundStarted {
                 current: 1,
                 total: 10,
             },
         )
         .expect("append round_started");
-        crate::potter_rollout::append_line(
+        crate::workflow::rollout::append_line(
             &potter_rollout_path,
-            &crate::potter_rollout::PotterRolloutLine::RoundConfigured {
+            &crate::workflow::rollout::PotterRolloutLine::RoundConfigured {
                 thread_id,
                 rollout_path: upstream_missing,
                 rollout_path_raw: None,

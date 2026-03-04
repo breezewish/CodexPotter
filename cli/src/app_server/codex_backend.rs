@@ -6,34 +6,34 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
-use crate::app_server_protocol::ApplyPatchApprovalResponse;
-use crate::app_server_protocol::ClientInfo;
-use crate::app_server_protocol::ClientNotification;
-use crate::app_server_protocol::ClientRequest;
-use crate::app_server_protocol::CommandExecutionApprovalDecision;
-use crate::app_server_protocol::CommandExecutionRequestApprovalResponse;
-use crate::app_server_protocol::ExecCommandApprovalResponse;
-use crate::app_server_protocol::FileChangeApprovalDecision;
-use crate::app_server_protocol::FileChangeRequestApprovalResponse;
-use crate::app_server_protocol::InitializeParams;
-use crate::app_server_protocol::JSONRPCError;
-use crate::app_server_protocol::JSONRPCErrorError;
-use crate::app_server_protocol::JSONRPCMessage;
-use crate::app_server_protocol::JSONRPCResponse;
-use crate::app_server_protocol::RequestId;
-use crate::app_server_protocol::ServerRequest;
-use crate::app_server_protocol::ThreadResumeParams;
-use crate::app_server_protocol::ThreadResumeResponse;
-use crate::app_server_protocol::ThreadRollbackParams;
-use crate::app_server_protocol::ThreadRollbackResponse;
-use crate::app_server_protocol::ThreadStartParams;
-use crate::app_server_protocol::ThreadStartResponse;
-use crate::app_server_protocol::TurnStartParams;
-use crate::app_server_protocol::TurnStartResponse;
-use crate::app_server_protocol::UserInput as ApiUserInput;
-use crate::potter_stream_recovery::ContinueRetryDecision;
-use crate::potter_stream_recovery::ContinueRetryPlan;
-use crate::potter_stream_recovery::PotterStreamRecovery;
+use crate::app_server::stream_recovery::ContinueRetryDecision;
+use crate::app_server::stream_recovery::ContinueRetryPlan;
+use crate::app_server::stream_recovery::PotterStreamRecovery;
+use crate::app_server::upstream_protocol::ApplyPatchApprovalResponse;
+use crate::app_server::upstream_protocol::ClientInfo;
+use crate::app_server::upstream_protocol::ClientNotification;
+use crate::app_server::upstream_protocol::ClientRequest;
+use crate::app_server::upstream_protocol::CommandExecutionApprovalDecision;
+use crate::app_server::upstream_protocol::CommandExecutionRequestApprovalResponse;
+use crate::app_server::upstream_protocol::ExecCommandApprovalResponse;
+use crate::app_server::upstream_protocol::FileChangeApprovalDecision;
+use crate::app_server::upstream_protocol::FileChangeRequestApprovalResponse;
+use crate::app_server::upstream_protocol::InitializeParams;
+use crate::app_server::upstream_protocol::JSONRPCError;
+use crate::app_server::upstream_protocol::JSONRPCErrorError;
+use crate::app_server::upstream_protocol::JSONRPCMessage;
+use crate::app_server::upstream_protocol::JSONRPCResponse;
+use crate::app_server::upstream_protocol::RequestId;
+use crate::app_server::upstream_protocol::ServerRequest;
+use crate::app_server::upstream_protocol::ThreadResumeParams;
+use crate::app_server::upstream_protocol::ThreadResumeResponse;
+use crate::app_server::upstream_protocol::ThreadRollbackParams;
+use crate::app_server::upstream_protocol::ThreadRollbackResponse;
+use crate::app_server::upstream_protocol::ThreadStartParams;
+use crate::app_server::upstream_protocol::ThreadStartResponse;
+use crate::app_server::upstream_protocol::TurnStartParams;
+use crate::app_server::upstream_protocol::TurnStartResponse;
+use crate::app_server::upstream_protocol::UserInput as ApiUserInput;
 use anyhow::Context;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -75,8 +75,8 @@ struct StreamRecoveryContext {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AppServerLaunchConfig {
-    pub spawn_sandbox: Option<crate::app_server_protocol::SandboxMode>,
-    pub thread_sandbox: Option<crate::app_server_protocol::SandboxMode>,
+    pub spawn_sandbox: Option<crate::app_server::upstream_protocol::SandboxMode>,
+    pub thread_sandbox: Option<crate::app_server::upstream_protocol::SandboxMode>,
     pub bypass_approvals_and_sandbox: bool,
 }
 
@@ -85,7 +85,9 @@ impl AppServerLaunchConfig {
         if bypass {
             return Self {
                 spawn_sandbox: None,
-                thread_sandbox: Some(crate::app_server_protocol::SandboxMode::DangerFullAccess),
+                thread_sandbox: Some(
+                    crate::app_server::upstream_protocol::SandboxMode::DangerFullAccess,
+                ),
                 bypass_approvals_and_sandbox: true,
             };
         }
@@ -447,9 +449,11 @@ async fn spawn_app_server(
     if let Some(mode) = launch.spawn_sandbox {
         cmd.arg("--sandbox");
         cmd.arg(match mode {
-            crate::app_server_protocol::SandboxMode::ReadOnly => "read-only",
-            crate::app_server_protocol::SandboxMode::WorkspaceWrite => "workspace-write",
-            crate::app_server_protocol::SandboxMode::DangerFullAccess => "danger-full-access",
+            crate::app_server::upstream_protocol::SandboxMode::ReadOnly => "read-only",
+            crate::app_server::upstream_protocol::SandboxMode::WorkspaceWrite => "workspace-write",
+            crate::app_server::upstream_protocol::SandboxMode::DangerFullAccess => {
+                "danger-full-access"
+            }
         });
     }
 
@@ -503,14 +507,14 @@ async fn initialize_app_server(
 
 struct ThreadStartSettings {
     developer_instructions: Option<String>,
-    sandbox_mode: Option<crate::app_server_protocol::SandboxMode>,
+    sandbox_mode: Option<crate::app_server::upstream_protocol::SandboxMode>,
     cwd: Option<PathBuf>,
 }
 
 struct ThreadResumeSettings {
     thread_id: ThreadId,
     developer_instructions: Option<String>,
-    sandbox_mode: Option<crate::app_server_protocol::SandboxMode>,
+    sandbox_mode: Option<crate::app_server::upstream_protocol::SandboxMode>,
     cwd: Option<PathBuf>,
 }
 
@@ -534,7 +538,7 @@ async fn thread_start(
             model: None,
             model_provider: None,
             cwd: cwd.map(|cwd| cwd.to_string_lossy().to_string()),
-            approval_policy: Some(crate::app_server_protocol::AskForApproval::Never),
+            approval_policy: Some(crate::app_server::upstream_protocol::AskForApproval::Never),
             sandbox: sandbox_mode,
             config: None,
             base_instructions: None,
@@ -570,7 +574,7 @@ async fn thread_resume(
             model: None,
             model_provider: None,
             cwd: cwd.map(|cwd| cwd.to_string_lossy().to_string()),
-            approval_policy: Some(crate::app_server_protocol::AskForApproval::Never),
+            approval_policy: Some(crate::app_server::upstream_protocol::AskForApproval::Never),
             sandbox: sandbox_mode,
             config: None,
             base_instructions: None,
@@ -876,7 +880,7 @@ fn handle_codex_event(
 
 async fn handle_server_request(
     stdin: &mut ChildStdin,
-    request: crate::app_server_protocol::JSONRPCRequest,
+    request: crate::app_server::upstream_protocol::JSONRPCRequest,
 ) -> anyhow::Result<()> {
     let request_id = request.id.clone();
     let method = request.method.clone();
@@ -2054,7 +2058,7 @@ touch "$MARKER"
                     launch: AppServerLaunchConfig {
                         spawn_sandbox: None,
                         thread_sandbox: Some(
-                            crate::app_server_protocol::SandboxMode::DangerFullAccess,
+                            crate::app_server::upstream_protocol::SandboxMode::DangerFullAccess,
                         ),
                         bypass_approvals_and_sandbox: true,
                     },
@@ -2152,10 +2156,10 @@ touch "$MARKER"
                     developer_instructions: None,
                     launch: AppServerLaunchConfig {
                         spawn_sandbox: Some(
-                            crate::app_server_protocol::SandboxMode::WorkspaceWrite,
+                            crate::app_server::upstream_protocol::SandboxMode::WorkspaceWrite,
                         ),
                         thread_sandbox: Some(
-                            crate::app_server_protocol::SandboxMode::WorkspaceWrite,
+                            crate::app_server::upstream_protocol::SandboxMode::WorkspaceWrite,
                         ),
                         bypass_approvals_and_sandbox: false,
                     },

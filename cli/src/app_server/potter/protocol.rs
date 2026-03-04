@@ -5,10 +5,10 @@ use codex_protocol::protocol::PotterRoundOutcome;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::app_server_protocol::InitializeParams;
-use crate::app_server_protocol::JSONRPCNotification;
-use crate::app_server_protocol::JSONRPCRequest;
-use crate::app_server_protocol::RequestId;
+use crate::app_server::upstream_protocol::InitializeParams;
+use crate::app_server::upstream_protocol::JSONRPCNotification;
+use crate::app_server::upstream_protocol::JSONRPCRequest;
+use crate::app_server::upstream_protocol::RequestId;
 
 pub const POTTER_EVENT_NOTIFICATION_METHOD: &str = "codex/event/potter";
 

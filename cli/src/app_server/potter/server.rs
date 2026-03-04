@@ -23,37 +23,37 @@ use tokio::io::BufReader;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::mpsc::unbounded_channel;
 
-use crate::app_server_protocol::JSONRPCError;
-use crate::app_server_protocol::JSONRPCErrorError;
-use crate::app_server_protocol::JSONRPCMessage;
-use crate::app_server_protocol::JSONRPCNotification;
-use crate::app_server_protocol::JSONRPCRequest;
-use crate::app_server_protocol::JSONRPCResponse;
-use crate::app_server_protocol::RequestId;
-use crate::potter_app_server_protocol::POTTER_EVENT_NOTIFICATION_METHOD;
-use crate::potter_app_server_protocol::PotterAppServerClientNotification;
-use crate::potter_app_server_protocol::PotterAppServerClientRequest;
-use crate::potter_app_server_protocol::PotterEventMode;
-use crate::potter_app_server_protocol::ProjectInterruptParams;
-use crate::potter_app_server_protocol::ProjectListEntry;
-use crate::potter_app_server_protocol::ProjectListParams;
-use crate::potter_app_server_protocol::ProjectListResponse;
-use crate::potter_app_server_protocol::ProjectResumeParams;
-use crate::potter_app_server_protocol::ProjectResumeReplay;
-use crate::potter_app_server_protocol::ProjectResumeReplayRound;
-use crate::potter_app_server_protocol::ProjectResumeResponse;
-use crate::potter_app_server_protocol::ProjectResumeUnfinishedRound;
-use crate::potter_app_server_protocol::ProjectStartParams;
-use crate::potter_app_server_protocol::ProjectStartResponse;
-use crate::potter_app_server_protocol::ProjectStartRoundsParams;
-use crate::potter_app_server_protocol::ProjectStartRoundsResponse;
-use crate::potter_app_server_protocol::ResumePolicy;
+use crate::app_server::potter::POTTER_EVENT_NOTIFICATION_METHOD;
+use crate::app_server::potter::PotterAppServerClientNotification;
+use crate::app_server::potter::PotterAppServerClientRequest;
+use crate::app_server::potter::PotterEventMode;
+use crate::app_server::potter::ProjectInterruptParams;
+use crate::app_server::potter::ProjectListEntry;
+use crate::app_server::potter::ProjectListParams;
+use crate::app_server::potter::ProjectListResponse;
+use crate::app_server::potter::ProjectResumeParams;
+use crate::app_server::potter::ProjectResumeReplay;
+use crate::app_server::potter::ProjectResumeReplayRound;
+use crate::app_server::potter::ProjectResumeResponse;
+use crate::app_server::potter::ProjectResumeUnfinishedRound;
+use crate::app_server::potter::ProjectStartParams;
+use crate::app_server::potter::ProjectStartResponse;
+use crate::app_server::potter::ProjectStartRoundsParams;
+use crate::app_server::potter::ProjectStartRoundsResponse;
+use crate::app_server::potter::ResumePolicy;
+use crate::app_server::upstream_protocol::JSONRPCError;
+use crate::app_server::upstream_protocol::JSONRPCErrorError;
+use crate::app_server::upstream_protocol::JSONRPCMessage;
+use crate::app_server::upstream_protocol::JSONRPCNotification;
+use crate::app_server::upstream_protocol::JSONRPCRequest;
+use crate::app_server::upstream_protocol::JSONRPCResponse;
+use crate::app_server::upstream_protocol::RequestId;
 
 #[derive(Debug, Clone)]
 pub struct PotterAppServerConfig {
     pub default_workdir: PathBuf,
     pub codex_bin: String,
-    pub backend_launch: crate::app_server_backend::AppServerLaunchConfig,
+    pub backend_launch: crate::app_server::AppServerLaunchConfig,
     pub codex_compat_home: Option<PathBuf>,
     pub rounds: NonZeroUsize,
 }
@@ -67,10 +67,10 @@ struct RunningProject {
 #[derive(Debug, Clone)]
 struct ResumedProject {
     project_id: String,
-    resolved: crate::resume::ResolvedProjectPaths,
+    resolved: crate::workflow::resume::ResolvedProjectPaths,
     progress_file_rel: PathBuf,
-    potter_rollout_lines: Vec<crate::potter_rollout::PotterRolloutLine>,
-    index: crate::potter_rollout_resume_index::PotterRolloutResumeIndex,
+    potter_rollout_lines: Vec<crate::workflow::rollout::PotterRolloutLine>,
+    index: crate::workflow::rollout_resume_index::PotterRolloutResumeIndex,
 }
 
 struct ServerState {
@@ -292,7 +292,7 @@ fn project_list(
     let ProjectListParams { cwd } = params;
     let workdir = cwd.unwrap_or_else(|| default_workdir.to_path_buf());
 
-    let rows = crate::resume_picker_index::discover_resumable_projects(&workdir)
+    let rows = crate::workflow::resume_picker_index::discover_resumable_projects(&workdir)
         .with_context(|| format!("discover resumable projects under {}", workdir.display()))?;
 
     let mut projects = Vec::new();
@@ -333,7 +333,7 @@ async fn start_project(
         .canonicalize()
         .with_context(|| format!("canonicalize {}", workdir.display()))?;
 
-    let init = crate::project::init_project(&workdir, &user_message, Local::now())
+    let init = crate::workflow::project::init_project(&workdir, &user_message, Local::now())
         .context("initialize .codexpotter project")?;
     let progress_file_abs = workdir.join(&init.progress_file_rel);
     let project_dir_rel = init
@@ -343,8 +343,8 @@ async fn start_project(
         .to_path_buf();
     let project_dir_abs = workdir.join(&project_dir_rel);
 
-    let potter_rollout_path = crate::potter_rollout::potter_rollout_path(&project_dir_abs);
-    let git_branch = crate::project::progress_file_git_branch(&progress_file_abs)
+    let potter_rollout_path = crate::workflow::rollout::potter_rollout_path(&project_dir_abs);
+    let git_branch = crate::workflow::project::progress_file_git_branch(&progress_file_abs)
         .context("read git_branch from progress file")?;
 
     let rounds_total_u32 = match rounds {
@@ -397,7 +397,7 @@ fn resume_project(
     } = params;
 
     let cwd = cwd.unwrap_or_else(|| state.config.default_workdir.clone());
-    let resolved = crate::resume::resolve_project_paths(&cwd, &project_path)?;
+    let resolved = crate::workflow::resume::resolve_project_paths(&cwd, &project_path)?;
 
     let progress_file_rel = resolved
         .progress_file
@@ -405,12 +405,12 @@ fn resume_project(
         .context("derive progress file relative path")?
         .to_path_buf();
 
-    let git_branch = crate::project::progress_file_git_branch(&resolved.progress_file)
+    let git_branch = crate::workflow::project::progress_file_git_branch(&resolved.progress_file)
         .context("read git_branch from progress file")?;
 
-    let potter_rollout_path = crate::potter_rollout::potter_rollout_path(&resolved.project_dir);
+    let potter_rollout_path = crate::workflow::rollout::potter_rollout_path(&resolved.project_dir);
     let potter_rollout_lines = load_potter_rollout_lines(&potter_rollout_path)?;
-    let index = crate::potter_rollout_resume_index::build_resume_index(&potter_rollout_lines)?;
+    let index = crate::workflow::rollout_resume_index::build_resume_index(&potter_rollout_lines)?;
 
     let replay = build_resume_replay(&resolved, &index)?;
     let unfinished_round = build_unfinished_round_pre_action(&resolved, &replay, &index)?;
@@ -465,10 +465,10 @@ async fn start_rounds(
     };
 
     let potter_rollout_path =
-        crate::potter_rollout::potter_rollout_path(&resumed.resolved.project_dir);
+        crate::workflow::rollout::potter_rollout_path(&resumed.resolved.project_dir);
 
     // Resume continuation always starts a new iteration window; reset the progress file flag.
-    crate::project::set_progress_file_finite_incantatem(
+    crate::workflow::project::set_progress_file_finite_incantatem(
         &resumed.resolved.workdir,
         &resumed.progress_file_rel,
         false,
@@ -477,7 +477,7 @@ async fn start_rounds(
 
     let baseline_rounds = count_completed_rounds(&resumed.potter_rollout_lines);
     let baseline_rounds_u32 = u32::try_from(baseline_rounds).unwrap_or(u32::MAX);
-    let git_commit_start = crate::project::progress_file_git_commit_start(
+    let git_commit_start = crate::workflow::project::progress_file_git_commit_start(
         &resumed.resolved.workdir,
         &resumed.progress_file_rel,
     )
@@ -585,7 +585,7 @@ fn system_time_to_unix_secs(time: SystemTime) -> Option<u64> {
 
 fn load_potter_rollout_lines(
     potter_rollout_path: &Path,
-) -> anyhow::Result<Vec<crate::potter_rollout::PotterRolloutLine>> {
+) -> anyhow::Result<Vec<crate::workflow::rollout::PotterRolloutLine>> {
     if !potter_rollout_path.exists() {
         anyhow::bail!(
             "unsupported project: the project is from an older version of CodexPotter (missing potter-rollout.jsonl)",
@@ -598,7 +598,7 @@ fn load_potter_rollout_lines(
         );
     }
 
-    let lines = crate::potter_rollout::read_lines(potter_rollout_path)
+    let lines = crate::workflow::rollout::read_lines(potter_rollout_path)
         .with_context(|| format!("read {}", potter_rollout_path.display()))?;
     if lines.is_empty() {
         anyhow::bail!("potter-rollout is empty: {}", potter_rollout_path.display());
@@ -606,21 +606,21 @@ fn load_potter_rollout_lines(
     Ok(lines)
 }
 
-fn count_completed_rounds(lines: &[crate::potter_rollout::PotterRolloutLine]) -> usize {
+fn count_completed_rounds(lines: &[crate::workflow::rollout::PotterRolloutLine]) -> usize {
     lines
         .iter()
         .filter(|line| {
             matches!(
                 line,
-                crate::potter_rollout::PotterRolloutLine::RoundFinished { .. }
+                crate::workflow::rollout::PotterRolloutLine::RoundFinished { .. }
             )
         })
         .count()
 }
 
 fn build_resume_replay(
-    resolved: &crate::resume::ResolvedProjectPaths,
-    index: &crate::potter_rollout_resume_index::PotterRolloutResumeIndex,
+    resolved: &crate::workflow::resume::ResolvedProjectPaths,
+    index: &crate::workflow::rollout_resume_index::PotterRolloutResumeIndex,
 ) -> anyhow::Result<ProjectResumeReplay> {
     let mut completed_rounds = Vec::new();
     let mut is_first_round = true;
@@ -676,9 +676,9 @@ fn build_resume_replay(
 }
 
 fn build_unfinished_round_pre_action(
-    resolved: &crate::resume::ResolvedProjectPaths,
+    resolved: &crate::workflow::resume::ResolvedProjectPaths,
     replay: &ProjectResumeReplay,
-    index: &crate::potter_rollout_resume_index::PotterRolloutResumeIndex,
+    index: &crate::workflow::rollout_resume_index::PotterRolloutResumeIndex,
 ) -> anyhow::Result<Option<ProjectResumeUnfinishedRound>> {
     let Some(unfinished) = &index.unfinished_round else {
         return Ok(None);
@@ -729,7 +729,7 @@ fn remaining_rounds_including_current(round_current: u32, round_total: u32) -> a
 }
 
 fn resolve_rollout_path_for_replay(
-    project: &crate::resume::ResolvedProjectPaths,
+    project: &crate::workflow::resume::ResolvedProjectPaths,
     rollout_path: &Path,
 ) -> PathBuf {
     if rollout_path.is_absolute() {
@@ -870,7 +870,7 @@ fn read_upstream_rollout_event_msgs(rollout_path: &Path) -> anyhow::Result<Vec<E
         out.push(msg);
     }
 
-    Ok(crate::resume::filter_pending_interactive_prompts_for_replay(out))
+    Ok(crate::workflow::resume::filter_pending_interactive_prompts_for_replay(out))
 }
 
 #[derive(Debug, Clone)]
@@ -967,12 +967,14 @@ async fn run_fresh_project(
     } = plan;
 
     let project_started_at = Instant::now();
-    let developer_prompt = crate::project::render_developer_prompt(&progress_file_rel);
-    let turn_prompt = crate::project::fixed_prompt().trim_end().to_string();
+    let developer_prompt = crate::workflow::project::render_developer_prompt(&progress_file_rel);
+    let turn_prompt = crate::workflow::project::fixed_prompt()
+        .trim_end()
+        .to_string();
 
     let backend_event_mode = backend_event_mode_for_potter(event_mode);
 
-    let round_context = crate::round_runner::PotterRoundContext {
+    let round_context = crate::workflow::round_runner::PotterRoundContext {
         codex_bin: config.codex_bin,
         developer_prompt,
         backend_launch: config.backend_launch,
@@ -996,7 +998,7 @@ async fn run_fresh_project(
     for round_index in 0..rounds_total {
         let current_round = round_index.saturating_add(1);
         let project_started = if round_index == 0 {
-            Some(crate::round_runner::PotterProjectStartedInfo {
+            Some(crate::workflow::round_runner::PotterProjectStartedInfo {
                 user_message: Some(user_message.clone()),
                 working_dir: workdir.clone(),
                 project_dir: project_dir_rel.clone(),
@@ -1006,10 +1008,10 @@ async fn run_fresh_project(
             None
         };
 
-        let round_result = crate::round_runner::run_potter_round(
+        let round_result = crate::workflow::round_runner::run_potter_round(
             &mut ui,
             &round_context,
-            crate::round_runner::PotterRoundOptions {
+            crate::workflow::round_runner::PotterRoundOptions {
                 pad_before_first_cell: round_index != 0,
                 project_started,
                 round_current: current_round,
@@ -1079,12 +1081,15 @@ async fn run_resumed_project(
     } = plan;
 
     let project_started_at = Instant::now();
-    let developer_prompt = crate::project::render_developer_prompt(&resumed.progress_file_rel);
-    let turn_prompt = crate::project::fixed_prompt().trim_end().to_string();
+    let developer_prompt =
+        crate::workflow::project::render_developer_prompt(&resumed.progress_file_rel);
+    let turn_prompt = crate::workflow::project::fixed_prompt()
+        .trim_end()
+        .to_string();
 
     let backend_event_mode = backend_event_mode_for_potter(event_mode);
 
-    let round_context = crate::round_runner::PotterRoundContext {
+    let round_context = crate::workflow::round_runner::PotterRoundContext {
         codex_bin: config.codex_bin,
         developer_prompt,
         backend_launch: config.backend_launch,
@@ -1144,10 +1149,10 @@ async fn run_resumed_project(
         let mut rounds_run = 0u32;
         let mut outcome = PotterProjectOutcome::BudgetExhausted;
 
-        let round_result = crate::round_runner::continue_potter_round(
+        let round_result = crate::workflow::round_runner::continue_potter_round(
             &mut ui,
             &round_context,
-            crate::round_runner::PotterContinueRoundOptions {
+            crate::workflow::round_runner::PotterContinueRoundOptions {
                 pad_before_first_cell: true,
                 round_current: unfinished.round_current,
                 round_total: total_rounds,
@@ -1206,10 +1211,10 @@ async fn run_resumed_project(
                 .round_current
                 .saturating_add(offset.saturating_add(1));
             let project_succeeded_rounds = baseline_rounds.saturating_add(offset.saturating_add(2));
-            let round_result = crate::round_runner::run_potter_round(
+            let round_result = crate::workflow::round_runner::run_potter_round(
                 &mut ui,
                 &round_context,
-                crate::round_runner::PotterRoundOptions {
+                crate::workflow::round_runner::PotterRoundOptions {
                     pad_before_first_cell: true,
                     project_started: None,
                     round_current: current_round,
@@ -1266,10 +1271,10 @@ async fn run_resumed_project(
     while rounds_run < rounds_total {
         let current_round = rounds_run.saturating_add(1);
         let project_succeeded_rounds = baseline_rounds.saturating_add(current_round);
-        let round_result = crate::round_runner::run_potter_round(
+        let round_result = crate::workflow::round_runner::run_potter_round(
             &mut ui,
             &round_context,
-            crate::round_runner::PotterRoundOptions {
+            crate::workflow::round_runner::PotterRoundOptions {
                 pad_before_first_cell: true,
                 project_started: None,
                 round_current: current_round,
@@ -1321,12 +1326,10 @@ async fn run_resumed_project(
     Ok(())
 }
 
-fn backend_event_mode_for_potter(
-    mode: PotterEventMode,
-) -> crate::app_server_backend::AppServerEventMode {
+fn backend_event_mode_for_potter(mode: PotterEventMode) -> crate::app_server::AppServerEventMode {
     match mode {
-        PotterEventMode::Interactive => crate::app_server_backend::AppServerEventMode::Interactive,
-        PotterEventMode::ExecJson => crate::app_server_backend::AppServerEventMode::ExecJson,
+        PotterEventMode::Interactive => crate::app_server::AppServerEventMode::Interactive,
+        PotterEventMode::ExecJson => crate::app_server::AppServerEventMode::ExecJson,
     }
 }
 
@@ -1404,13 +1407,13 @@ impl EventForwardingRoundUi {
     }
 }
 
-impl crate::round_runner::PotterRoundUi for EventForwardingRoundUi {
+impl crate::workflow::round_runner::PotterRoundUi for EventForwardingRoundUi {
     fn set_project_started_at(&mut self, _started_at: Instant) {}
 
     fn render_round<'a>(
         &'a mut self,
         params: codex_tui::RenderRoundParams,
-    ) -> crate::round_runner::UiFuture<'a, codex_tui::AppExitInfo> {
+    ) -> crate::workflow::round_runner::UiFuture<'a, codex_tui::AppExitInfo> {
         Box::pin(async move {
             let codex_tui::RenderRoundParams {
                 prompt,
@@ -1516,7 +1519,7 @@ mod tests {
         let config = PotterAppServerConfig {
             default_workdir: temp.path().to_path_buf(),
             codex_bin: "codex".to_string(),
-            backend_launch: crate::app_server_backend::AppServerLaunchConfig {
+            backend_launch: crate::app_server::AppServerLaunchConfig {
                 spawn_sandbox: None,
                 thread_sandbox: None,
                 bypass_approvals_and_sandbox: false,
@@ -1569,7 +1572,7 @@ mod tests {
         let config = PotterAppServerConfig {
             default_workdir: temp.path().to_path_buf(),
             codex_bin: "codex".to_string(),
-            backend_launch: crate::app_server_backend::AppServerLaunchConfig {
+            backend_launch: crate::app_server::AppServerLaunchConfig {
                 spawn_sandbox: None,
                 thread_sandbox: None,
                 bypass_approvals_and_sandbox: false,
@@ -1581,7 +1584,7 @@ mod tests {
         let workdir = temp.path().to_path_buf();
         let project_dir = temp.path().join("project");
         let progress_file = project_dir.join("MAIN.md");
-        let resolved = crate::resume::ResolvedProjectPaths {
+        let resolved = crate::workflow::resume::ResolvedProjectPaths {
             progress_file,
             project_dir: project_dir.clone(),
             workdir: workdir.clone(),
@@ -1590,18 +1593,20 @@ mod tests {
         let project_id = "project_1".to_string();
         let progress_file_rel = PathBuf::from(".codexpotter/projects/2026/03/04/6/MAIN.md");
 
-        let index = crate::potter_rollout_resume_index::PotterRolloutResumeIndex {
-            project_started: crate::potter_rollout_resume_index::ProjectStartedIndex {
+        let index = crate::workflow::rollout_resume_index::PotterRolloutResumeIndex {
+            project_started: crate::workflow::rollout_resume_index::ProjectStartedIndex {
                 user_message: Some("hello".to_string()),
                 user_prompt_file: progress_file_rel.clone(),
             },
             completed_rounds: Vec::new(),
-            unfinished_round: Some(crate::potter_rollout_resume_index::UnfinishedRoundIndex {
-                round_current: 1,
-                round_total: 1,
-                thread_id: ThreadId::default(),
-                rollout_path: PathBuf::from("missing-rollout.jsonl"),
-            }),
+            unfinished_round: Some(
+                crate::workflow::rollout_resume_index::UnfinishedRoundIndex {
+                    round_current: 1,
+                    round_total: 1,
+                    thread_id: ThreadId::default(),
+                    rollout_path: PathBuf::from("missing-rollout.jsonl"),
+                },
+            ),
         };
 
         let plan = ResumedProjectPlan {
@@ -1654,7 +1659,7 @@ mod tests {
         let config = PotterAppServerConfig {
             default_workdir: temp.path().to_path_buf(),
             codex_bin: "codex".to_string(),
-            backend_launch: crate::app_server_backend::AppServerLaunchConfig {
+            backend_launch: crate::app_server::AppServerLaunchConfig {
                 spawn_sandbox: None,
                 thread_sandbox: None,
                 bypass_approvals_and_sandbox: false,
@@ -1727,7 +1732,7 @@ mod tests {
         let config = PotterAppServerConfig {
             default_workdir: temp.path().to_path_buf(),
             codex_bin: "codex".to_string(),
-            backend_launch: crate::app_server_backend::AppServerLaunchConfig {
+            backend_launch: crate::app_server::AppServerLaunchConfig {
                 spawn_sandbox: None,
                 thread_sandbox: None,
                 bypass_approvals_and_sandbox: false,

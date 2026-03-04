@@ -21,13 +21,13 @@ use tokio::sync::mpsc::unbounded_channel;
 const PROJECT_MAIN_FILE: &str = "MAIN.md";
 const CODEXPOTTER_DIR: &str = ".codexpotter";
 
-trait ResumeUi: crate::round_runner::PotterRoundUi {
+trait ResumeUi: crate::workflow::round_runner::PotterRoundUi {
     fn clear(&mut self) -> anyhow::Result<()>;
 
     fn prompt_action_picker<'a>(
         &'a mut self,
         actions: Vec<String>,
-    ) -> crate::round_runner::UiFuture<'a, Option<usize>>;
+    ) -> crate::workflow::round_runner::UiFuture<'a, Option<usize>>;
 }
 
 impl ResumeUi for codex_tui::CodexPotterTui {
@@ -38,7 +38,7 @@ impl ResumeUi for codex_tui::CodexPotterTui {
     fn prompt_action_picker<'a>(
         &'a mut self,
         actions: Vec<String>,
-    ) -> crate::round_runner::UiFuture<'a, Option<usize>> {
+    ) -> crate::workflow::round_runner::UiFuture<'a, Option<usize>> {
         Box::pin(codex_tui::CodexPotterTui::prompt_action_picker(
             self, actions,
         ))
@@ -57,14 +57,14 @@ impl ResumeClock for SystemResumeClock {
     }
 }
 
-trait ResumeAppServer: crate::potter_project_render_loop::PotterEventSource {
+trait ResumeAppServer: crate::workflow::project_render_loop::PotterEventSource {
     fn project_start_rounds<'a>(
         &'a mut self,
-        params: crate::potter_app_server_protocol::ProjectStartRoundsParams,
-    ) -> crate::round_runner::UiFuture<
+        params: crate::app_server::potter::ProjectStartRoundsParams,
+    ) -> crate::workflow::round_runner::UiFuture<
         'a,
         (
-            crate::potter_app_server_protocol::ProjectStartRoundsResponse,
+            crate::app_server::potter::ProjectStartRoundsResponse,
             Vec<Event>,
         ),
     >;
@@ -72,17 +72,17 @@ trait ResumeAppServer: crate::potter_project_render_loop::PotterEventSource {
     fn project_interrupt<'a>(
         &'a mut self,
         project_id: String,
-    ) -> crate::round_runner::UiFuture<'a, ()>;
+    ) -> crate::workflow::round_runner::UiFuture<'a, ()>;
 }
 
-impl ResumeAppServer for crate::potter_app_server_client::PotterAppServerClient {
+impl ResumeAppServer for crate::app_server::potter::PotterAppServerClient {
     fn project_start_rounds<'a>(
         &'a mut self,
-        params: crate::potter_app_server_protocol::ProjectStartRoundsParams,
-    ) -> crate::round_runner::UiFuture<
+        params: crate::app_server::potter::ProjectStartRoundsParams,
+    ) -> crate::workflow::round_runner::UiFuture<
         'a,
         (
-            crate::potter_app_server_protocol::ProjectStartRoundsResponse,
+            crate::app_server::potter::ProjectStartRoundsResponse,
             Vec<Event>,
         ),
     > {
@@ -98,11 +98,11 @@ impl ResumeAppServer for crate::potter_app_server_client::PotterAppServerClient 
     fn project_interrupt<'a>(
         &'a mut self,
         project_id: String,
-    ) -> crate::round_runner::UiFuture<'a, ()> {
+    ) -> crate::workflow::round_runner::UiFuture<'a, ()> {
         Box::pin(async move {
             let mut buffered_events = Vec::new();
             self.project_interrupt(
-                crate::potter_app_server_protocol::ProjectInterruptParams { project_id },
+                crate::app_server::potter::ProjectInterruptParams { project_id },
                 &mut buffered_events,
             )
             .await?;
@@ -191,7 +191,7 @@ pub fn resolve_project_paths(
 /// always sees the initial prompt and round context first.
 pub async fn run_resume(
     ui: &mut codex_tui::CodexPotterTui,
-    app_server: &mut crate::potter_app_server_client::PotterAppServerClient,
+    app_server: &mut crate::app_server::potter::PotterAppServerClient,
     cwd: &Path,
     project_path: &Path,
     iterate_rounds: NonZeroUsize,
@@ -199,10 +199,10 @@ pub async fn run_resume(
     let mut buffered_events = Vec::new();
     let resume = app_server
         .project_resume(
-            crate::potter_app_server_protocol::ProjectResumeParams {
+            crate::app_server::potter::ProjectResumeParams {
                 project_path: project_path.to_path_buf(),
                 cwd: Some(cwd.to_path_buf()),
-                event_mode: Some(crate::potter_app_server_protocol::PotterEventMode::Interactive),
+                event_mode: Some(crate::app_server::potter::PotterEventMode::Interactive),
             },
             &mut buffered_events,
         )
@@ -222,7 +222,7 @@ pub async fn run_resume(
 async fn run_resume_with_deps<U, S, C>(
     ui: &mut U,
     app_server: &mut S,
-    resume: crate::potter_app_server_protocol::ProjectResumeResponse,
+    resume: crate::app_server::potter::ProjectResumeResponse,
     iterate_rounds: NonZeroUsize,
     clock: &C,
 ) -> anyhow::Result<ResumeExit>
@@ -333,14 +333,12 @@ where
     });
 
     let (start_rounds_response, buffered_events) = app_server
-        .project_start_rounds(
-            crate::potter_app_server_protocol::ProjectStartRoundsParams {
-                project_id: project_id.clone(),
-                rounds: Some(rounds),
-                resume_policy: None,
-                event_mode: Some(crate::potter_app_server_protocol::PotterEventMode::Interactive),
-            },
-        )
+        .project_start_rounds(crate::app_server::potter::ProjectStartRoundsParams {
+            project_id: project_id.clone(),
+            rounds: Some(rounds),
+            resume_policy: None,
+            event_mode: Some(crate::app_server::potter::PotterEventMode::Interactive),
+        })
         .await
         .context("project/start_rounds via potter app-server")?;
     anyhow::ensure!(
@@ -349,12 +347,14 @@ where
         start_rounds_response.rounds_total
     );
 
-    let exit = crate::potter_project_render_loop::run_potter_project_render_loop(
+    let exit = crate::workflow::project_render_loop::run_potter_project_render_loop(
         ui,
         app_server,
         &project_id,
-        crate::potter_project_render_loop::PotterProjectRenderOptions {
-            turn_prompt: crate::project::fixed_prompt().trim_end().to_string(),
+        crate::workflow::project_render_loop::PotterProjectRenderOptions {
+            turn_prompt: crate::workflow::project::fixed_prompt()
+                .trim_end()
+                .to_string(),
             prompt_footer,
             pad_before_first_cell: true,
             initial_status_header_prefix,
@@ -364,14 +364,14 @@ where
     .await?;
 
     match exit {
-        crate::potter_project_render_loop::PotterProjectRenderExit::Completed { .. } => {
+        crate::workflow::project_render_loop::PotterProjectRenderExit::Completed { .. } => {
             Ok(ResumeExit::Completed)
         }
-        crate::potter_project_render_loop::PotterProjectRenderExit::UserRequested => {
+        crate::workflow::project_render_loop::PotterProjectRenderExit::UserRequested => {
             let _ = app_server.project_interrupt(project_id.clone()).await;
             Ok(ResumeExit::UserRequested)
         }
-        crate::potter_project_render_loop::PotterProjectRenderExit::FatalExitRequested => {
+        crate::workflow::project_render_loop::PotterProjectRenderExit::FatalExitRequested => {
             let _ = app_server.project_interrupt(project_id.clone()).await;
             Ok(ResumeExit::FatalExitRequested)
         }
@@ -429,7 +429,7 @@ enum ReplayRoundExitDecision {
 #[cfg(test)]
 fn load_potter_rollout_lines(
     potter_rollout_path: &Path,
-) -> anyhow::Result<Vec<crate::potter_rollout::PotterRolloutLine>> {
+) -> anyhow::Result<Vec<crate::workflow::rollout::PotterRolloutLine>> {
     if !potter_rollout_path.exists() {
         anyhow::bail!(
             "unsupported project: the project is from an older version of CodexPotter (missing potter-rollout.jsonl)",
@@ -442,7 +442,7 @@ fn load_potter_rollout_lines(
         );
     }
 
-    let lines = crate::potter_rollout::read_lines(potter_rollout_path)
+    let lines = crate::workflow::rollout::read_lines(potter_rollout_path)
         .with_context(|| format!("read {}", potter_rollout_path.display()))?;
     if lines.is_empty() {
         anyhow::bail!("potter-rollout is empty: {}", potter_rollout_path.display());
@@ -568,9 +568,9 @@ impl UnfinishedRoundPlan {
 #[cfg(test)]
 fn build_round_replay_plans(
     project: &ResolvedProjectPaths,
-    potter_rollout_lines: &[crate::potter_rollout::PotterRolloutLine],
+    potter_rollout_lines: &[crate::workflow::rollout::PotterRolloutLine],
 ) -> anyhow::Result<ResumeReplayPlans> {
-    let index = crate::potter_rollout_resume_index::build_resume_index(potter_rollout_lines)?;
+    let index = crate::workflow::rollout_resume_index::build_resume_index(potter_rollout_lines)?;
 
     let mut project_started = Some(index.project_started);
     let mut rounds = Vec::new();
@@ -1009,7 +1009,7 @@ mod tests {
         ops: Vec<MockUiOp>,
     }
 
-    impl crate::round_runner::PotterRoundUi for MockResumeUi {
+    impl crate::workflow::round_runner::PotterRoundUi for MockResumeUi {
         fn set_project_started_at(&mut self, started_at: Instant) {
             self.ops.push(MockUiOp::SetProjectStartedAt(started_at));
         }
@@ -1017,7 +1017,7 @@ mod tests {
         fn render_round<'a>(
             &'a mut self,
             params: codex_tui::RenderRoundParams,
-        ) -> crate::round_runner::UiFuture<'a, codex_tui::AppExitInfo> {
+        ) -> crate::workflow::round_runner::UiFuture<'a, codex_tui::AppExitInfo> {
             self.ops.push(MockUiOp::RenderRound);
 
             Box::pin(async move {
@@ -1065,7 +1065,7 @@ mod tests {
         fn prompt_action_picker<'a>(
             &'a mut self,
             actions: Vec<String>,
-        ) -> crate::round_runner::UiFuture<'a, Option<usize>> {
+        ) -> crate::workflow::round_runner::UiFuture<'a, Option<usize>> {
             self.ops.push(MockUiOp::PromptActionPicker(actions));
             Box::pin(async { Ok(Some(0)) })
         }
@@ -1099,8 +1099,10 @@ mod tests {
         buffered_events: Vec<Event>,
     }
 
-    impl crate::potter_project_render_loop::PotterEventSource for MockAppServer {
-        fn read_next_event<'a>(&'a mut self) -> crate::round_runner::UiFuture<'a, Option<Event>> {
+    impl crate::workflow::project_render_loop::PotterEventSource for MockAppServer {
+        fn read_next_event<'a>(
+            &'a mut self,
+        ) -> crate::workflow::round_runner::UiFuture<'a, Option<Event>> {
             Box::pin(async { Ok(None) })
         }
     }
@@ -1108,17 +1110,17 @@ mod tests {
     impl ResumeAppServer for MockAppServer {
         fn project_start_rounds<'a>(
             &'a mut self,
-            params: crate::potter_app_server_protocol::ProjectStartRoundsParams,
-        ) -> crate::round_runner::UiFuture<
+            params: crate::app_server::potter::ProjectStartRoundsParams,
+        ) -> crate::workflow::round_runner::UiFuture<
             'a,
             (
-                crate::potter_app_server_protocol::ProjectStartRoundsResponse,
+                crate::app_server::potter::ProjectStartRoundsResponse,
                 Vec<Event>,
             ),
         > {
             Box::pin(async move {
                 Ok((
-                    crate::potter_app_server_protocol::ProjectStartRoundsResponse {
+                    crate::app_server::potter::ProjectStartRoundsResponse {
                         rounds_total: params.rounds.unwrap_or(1),
                     },
                     std::mem::take(&mut self.buffered_events),
@@ -1129,7 +1131,7 @@ mod tests {
         fn project_interrupt<'a>(
             &'a mut self,
             _project_id: String,
-        ) -> crate::round_runner::UiFuture<'a, ()> {
+        ) -> crate::workflow::round_runner::UiFuture<'a, ()> {
             Box::pin(async { Ok(()) })
         }
     }
@@ -1144,7 +1146,7 @@ mod tests {
         let continue_started_at = base + Duration::from_secs(20);
         let clock = FixedResumeClock::new(vec![replay_started_at, continue_started_at]);
 
-        let resume = crate::potter_app_server_protocol::ProjectResumeResponse {
+        let resume = crate::app_server::potter::ProjectResumeResponse {
             project_id: String::from("project_1"),
             working_dir: temp.path().to_path_buf(),
             project_dir: temp.path().join("project"),
@@ -1153,33 +1155,31 @@ mod tests {
                 .path()
                 .join(".codexpotter/projects/2026/02/01/1/MAIN.md"),
             git_branch: None,
-            replay: crate::potter_app_server_protocol::ProjectResumeReplay {
+            replay: crate::app_server::potter::ProjectResumeReplay {
                 completed_rounds: Vec::new(),
             },
-            unfinished_round: Some(
-                crate::potter_app_server_protocol::ProjectResumeUnfinishedRound {
-                    round_current: 1,
-                    round_total: 1,
-                    pre_action_events: vec![
-                        EventMsg::PotterProjectStarted {
-                            user_message: Some(String::from("hello")),
-                            working_dir: temp.path().to_path_buf(),
-                            project_dir: temp.path().join("project"),
-                            user_prompt_file: PathBuf::from(
-                                ".codexpotter/projects/2026/02/01/1/MAIN.md",
-                            ),
-                        },
-                        EventMsg::PotterRoundStarted {
-                            current: 1,
-                            total: 1,
-                        },
-                        EventMsg::PotterRoundFinished {
-                            outcome: PotterRoundOutcome::Completed,
-                        },
-                    ],
-                    remaining_rounds_including_current: 1,
-                },
-            ),
+            unfinished_round: Some(crate::app_server::potter::ProjectResumeUnfinishedRound {
+                round_current: 1,
+                round_total: 1,
+                pre_action_events: vec![
+                    EventMsg::PotterProjectStarted {
+                        user_message: Some(String::from("hello")),
+                        working_dir: temp.path().to_path_buf(),
+                        project_dir: temp.path().join("project"),
+                        user_prompt_file: PathBuf::from(
+                            ".codexpotter/projects/2026/02/01/1/MAIN.md",
+                        ),
+                    },
+                    EventMsg::PotterRoundStarted {
+                        current: 1,
+                        total: 1,
+                    },
+                    EventMsg::PotterRoundFinished {
+                        outcome: PotterRoundOutcome::Completed,
+                    },
+                ],
+                remaining_rounds_including_current: 1,
+            }),
         };
 
         let mut app_server = MockAppServer {
@@ -1417,15 +1417,15 @@ mod tests {
             codex_protocol::ThreadId::from_string("019ca423-63d9-7641-ae83-db060ad3c000")
                 .expect("thread id");
         let potter_rollout_lines = vec![
-            crate::potter_rollout::PotterRolloutLine::ProjectStarted {
+            crate::workflow::rollout::PotterRolloutLine::ProjectStarted {
                 user_message: Some("hello".to_string()),
                 user_prompt_file: PathBuf::from(".codexpotter/projects/2026/02/01/1/MAIN.md"),
             },
-            crate::potter_rollout::PotterRolloutLine::RoundStarted {
+            crate::workflow::rollout::PotterRolloutLine::RoundStarted {
                 current: 1,
                 total: 10,
             },
-            crate::potter_rollout::PotterRolloutLine::RoundConfigured {
+            crate::workflow::rollout::PotterRolloutLine::RoundConfigured {
                 thread_id,
                 rollout_path: PathBuf::from("rollout.jsonl"),
                 rollout_path_raw: None,
@@ -1472,28 +1472,28 @@ mod tests {
                 .expect("next thread id");
 
         let potter_rollout_lines = vec![
-            crate::potter_rollout::PotterRolloutLine::ProjectStarted {
+            crate::workflow::rollout::PotterRolloutLine::ProjectStarted {
                 user_message: Some("hello".to_string()),
                 user_prompt_file: PathBuf::from(".codexpotter/projects/2026/02/01/1/MAIN.md"),
             },
-            crate::potter_rollout::PotterRolloutLine::RoundStarted {
+            crate::workflow::rollout::PotterRolloutLine::RoundStarted {
                 current: 1,
                 total: 10,
             },
-            crate::potter_rollout::PotterRolloutLine::RoundConfigured {
+            crate::workflow::rollout::PotterRolloutLine::RoundConfigured {
                 thread_id,
                 rollout_path: PathBuf::from("first.jsonl"),
                 rollout_path_raw: None,
                 rollout_base_dir: None,
             },
-            crate::potter_rollout::PotterRolloutLine::RoundFinished {
+            crate::workflow::rollout::PotterRolloutLine::RoundFinished {
                 outcome: PotterRoundOutcome::Completed,
             },
-            crate::potter_rollout::PotterRolloutLine::RoundStarted {
+            crate::workflow::rollout::PotterRolloutLine::RoundStarted {
                 current: 2,
                 total: 10,
             },
-            crate::potter_rollout::PotterRolloutLine::RoundConfigured {
+            crate::workflow::rollout::PotterRolloutLine::RoundConfigured {
                 thread_id: next_thread_id,
                 rollout_path: PathBuf::from("second.jsonl"),
                 rollout_path_raw: None,
@@ -1537,11 +1537,11 @@ mod tests {
             resolve_project_paths(temp.path(), Path::new("2026/02/01/1")).expect("resolve");
 
         let potter_rollout_lines = vec![
-            crate::potter_rollout::PotterRolloutLine::ProjectStarted {
+            crate::workflow::rollout::PotterRolloutLine::ProjectStarted {
                 user_message: Some("hello".to_string()),
                 user_prompt_file: PathBuf::from(".codexpotter/projects/2026/02/01/1/MAIN.md"),
             },
-            crate::potter_rollout::PotterRolloutLine::RoundStarted {
+            crate::workflow::rollout::PotterRolloutLine::RoundStarted {
                 current: 1,
                 total: 10,
             },

@@ -5,7 +5,7 @@ use std::time::Instant;
 use anyhow::Context;
 use codex_protocol::protocol::Event;
 
-use crate::round_runner::UiFuture;
+use crate::workflow::round_runner::UiFuture;
 
 /// Runtime configuration for running one or more CodexPotter projects.
 #[derive(Debug, Clone)]
@@ -38,14 +38,14 @@ pub enum ProjectQueueExit {
 /// composer (and exits when the queue is empty).
 pub async fn run_project_queue(
     ui: &mut codex_tui::CodexPotterTui,
-    app_server: &mut crate::potter_app_server_client::PotterAppServerClient,
+    app_server: &mut crate::app_server::potter::PotterAppServerClient,
     workdir: PathBuf,
     options: ProjectQueueOptions,
 ) -> anyhow::Result<ProjectQueueExit> {
     run_project_queue_with_deps(ui, app_server, workdir, options, &SystemProjectClock).await
 }
 
-trait ProjectRunnerUi: crate::round_runner::PotterRoundUi {
+trait ProjectRunnerUi: crate::workflow::round_runner::PotterRoundUi {
     fn clear(&mut self) -> anyhow::Result<()>;
 
     fn prompt_user<'a>(
@@ -85,32 +85,20 @@ impl ProjectClock for SystemProjectClock {
     }
 }
 
-trait ProjectAppServer: crate::potter_project_render_loop::PotterEventSource {
+trait ProjectAppServer: crate::workflow::project_render_loop::PotterEventSource {
     fn project_start<'a>(
         &'a mut self,
-        params: crate::potter_app_server_protocol::ProjectStartParams,
-    ) -> UiFuture<
-        'a,
-        (
-            crate::potter_app_server_protocol::ProjectStartResponse,
-            Vec<Event>,
-        ),
-    >;
+        params: crate::app_server::potter::ProjectStartParams,
+    ) -> UiFuture<'a, (crate::app_server::potter::ProjectStartResponse, Vec<Event>)>;
 
     fn project_interrupt<'a>(&'a mut self, project_id: String) -> UiFuture<'a, ()>;
 }
 
-impl ProjectAppServer for crate::potter_app_server_client::PotterAppServerClient {
+impl ProjectAppServer for crate::app_server::potter::PotterAppServerClient {
     fn project_start<'a>(
         &'a mut self,
-        params: crate::potter_app_server_protocol::ProjectStartParams,
-    ) -> UiFuture<
-        'a,
-        (
-            crate::potter_app_server_protocol::ProjectStartResponse,
-            Vec<Event>,
-        ),
-    > {
+        params: crate::app_server::potter::ProjectStartParams,
+    ) -> UiFuture<'a, (crate::app_server::potter::ProjectStartResponse, Vec<Event>)> {
         Box::pin(async move {
             let mut buffered_events = Vec::new();
             let response = self.project_start(params, &mut buffered_events).await?;
@@ -122,7 +110,7 @@ impl ProjectAppServer for crate::potter_app_server_client::PotterAppServerClient
         Box::pin(async move {
             let mut buffered_events = Vec::new();
             self.project_interrupt(
-                crate::potter_app_server_protocol::ProjectInterruptParams { project_id },
+                crate::app_server::potter::ProjectInterruptParams { project_id },
                 &mut buffered_events,
             )
             .await?;
@@ -143,22 +131,22 @@ where
     S: ProjectAppServer,
     C: ProjectClock,
 {
-    let mut pending_user_prompts = crate::prompt_queue::PromptQueue::empty();
+    let mut pending_user_prompts = crate::workflow::prompt_queue::PromptQueue::empty();
 
     'project: loop {
         let next_prompt = pending_user_prompts.pop_next_prompt(|| ui.pop_queued_user_prompt());
 
         let next_prompt = if options.allow_prompt_user {
-            crate::prompt_queue::next_prompt_or_prompt_user(next_prompt, || {
+            crate::workflow::prompt_queue::next_prompt_or_prompt_user(next_prompt, || {
                 let prompt_footer = codex_tui::PromptFooterContext::new(
                     workdir.clone(),
-                    crate::project::resolve_git_branch(&workdir),
+                    crate::workflow::project::resolve_git_branch(&workdir),
                 );
                 ui.prompt_user(prompt_footer)
             })
             .await?
         } else {
-            next_prompt.map(crate::prompt_queue::NextPrompt::FromQueue)
+            next_prompt.map(crate::workflow::prompt_queue::NextPrompt::FromQueue)
         };
 
         let Some(next_prompt) = next_prompt else {
@@ -166,8 +154,8 @@ where
         };
 
         let user_prompt = match next_prompt {
-            crate::prompt_queue::NextPrompt::FromQueue(prompt) => prompt,
-            crate::prompt_queue::NextPrompt::FromUser(prompt) => {
+            crate::workflow::prompt_queue::NextPrompt::FromQueue(prompt) => prompt,
+            crate::workflow::prompt_queue::NextPrompt::FromUser(prompt) => {
                 // Clear prompt UI remnants before doing any work / streaming output.
                 ui.clear()?;
                 prompt
@@ -180,15 +168,15 @@ where
         let rounds_total_u32 = u32::try_from(options.rounds.get()).unwrap_or(u32::MAX);
         let prompt_footer = codex_tui::PromptFooterContext::new(
             workdir.clone(),
-            crate::project::resolve_git_branch(&workdir),
+            crate::workflow::project::resolve_git_branch(&workdir),
         );
 
         let (start_response, buffered_events) = app_server
-            .project_start(crate::potter_app_server_protocol::ProjectStartParams {
+            .project_start(crate::app_server::potter::ProjectStartParams {
                 user_message: user_prompt.clone(),
                 cwd: Some(workdir.clone()),
                 rounds: Some(rounds_total_u32),
-                event_mode: Some(crate::potter_app_server_protocol::PotterEventMode::Interactive),
+                event_mode: Some(crate::app_server::potter::PotterEventMode::Interactive),
             })
             .await
             .context("project/start via potter app-server")?;
@@ -199,11 +187,11 @@ where
             .context("derive project dir from progress file path")?
             .to_path_buf();
 
-        let exit = crate::potter_project_render_loop::run_potter_project_render_loop(
+        let exit = crate::workflow::project_render_loop::run_potter_project_render_loop(
             ui,
             app_server,
             &start_response.project_id,
-            crate::potter_project_render_loop::PotterProjectRenderOptions {
+            crate::workflow::project_render_loop::PotterProjectRenderOptions {
                 turn_prompt: options.turn_prompt.clone(),
                 prompt_footer,
                 pad_before_first_cell: false,
@@ -214,15 +202,15 @@ where
         .await?;
 
         match exit {
-            crate::potter_project_render_loop::PotterProjectRenderExit::Completed { .. } => {}
-            crate::potter_project_render_loop::PotterProjectRenderExit::UserRequested => {
+            crate::workflow::project_render_loop::PotterProjectRenderExit::Completed { .. } => {}
+            crate::workflow::project_render_loop::PotterProjectRenderExit::UserRequested => {
                 // Best-effort: stop the server-side project before exiting.
                 let _ = app_server
                     .project_interrupt(start_response.project_id.clone())
                     .await;
                 return Ok(ProjectQueueExit::UserRequestedExit { project_dir });
             }
-            crate::potter_project_render_loop::PotterProjectRenderExit::FatalExitRequested => {
+            crate::workflow::project_render_loop::PotterProjectRenderExit::FatalExitRequested => {
                 let _ = app_server
                     .project_interrupt(start_response.project_id.clone())
                     .await;
@@ -266,7 +254,7 @@ mod tests {
         }
     }
 
-    impl crate::round_runner::PotterRoundUi for MockUi {
+    impl crate::workflow::round_runner::PotterRoundUi for MockUi {
         fn set_project_started_at(&mut self, _started_at: Instant) {
             self.project_started_at_calls += 1;
         }
@@ -274,7 +262,7 @@ mod tests {
         fn render_round<'a>(
             &'a mut self,
             params: codex_tui::RenderRoundParams,
-        ) -> crate::round_runner::UiFuture<'a, codex_tui::AppExitInfo> {
+        ) -> crate::workflow::round_runner::UiFuture<'a, codex_tui::AppExitInfo> {
             Box::pin(async move {
                 let codex_tui::RenderRoundParams {
                     mut codex_event_rx, ..
@@ -355,7 +343,7 @@ mod tests {
         }
     }
 
-    impl crate::potter_project_render_loop::PotterEventSource for MockAppServer {
+    impl crate::workflow::project_render_loop::PotterEventSource for MockAppServer {
         fn read_next_event<'a>(&'a mut self) -> UiFuture<'a, Option<Event>> {
             Box::pin(async { Ok(None) })
         }
@@ -364,14 +352,8 @@ mod tests {
     impl ProjectAppServer for MockAppServer {
         fn project_start<'a>(
             &'a mut self,
-            params: crate::potter_app_server_protocol::ProjectStartParams,
-        ) -> UiFuture<
-            'a,
-            (
-                crate::potter_app_server_protocol::ProjectStartResponse,
-                Vec<Event>,
-            ),
-        > {
+            params: crate::app_server::potter::ProjectStartParams,
+        ) -> UiFuture<'a, (crate::app_server::potter::ProjectStartResponse, Vec<Event>)> {
             Box::pin(async move {
                 self.started_prompts
                     .lock()
@@ -390,7 +372,7 @@ mod tests {
                 let progress_file = PathBuf::from(format!("/tmp/project_{idx}/MAIN.md"));
                 let project_id = format!("project_{idx}");
 
-                let response = crate::potter_app_server_protocol::ProjectStartResponse {
+                let response = crate::app_server::potter::ProjectStartResponse {
                     project_id: project_id.clone(),
                     working_dir: PathBuf::from("/tmp"),
                     project_dir: project_dir.clone(),

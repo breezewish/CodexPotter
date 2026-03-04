@@ -1,3 +1,10 @@
+mod jsonl;
+
+#[cfg(test)]
+mod json_round_ui;
+
+pub use jsonl::*;
+
 use std::io::Read as _;
 use std::io::Write;
 use std::num::NonZeroUsize;
@@ -14,7 +21,7 @@ pub async fn run_exec_json(
     prompt: Option<String>,
     rounds: NonZeroUsize,
     codex_bin: String,
-    backend_launch: crate::app_server_backend::AppServerLaunchConfig,
+    backend_launch: crate::app_server::AppServerLaunchConfig,
 ) -> i32 {
     let prompt = match prompt {
         Some(prompt) => prompt,
@@ -34,7 +41,7 @@ pub async fn run_exec_json(
 
     let rounds_total_u32 = u32::try_from(rounds.get()).unwrap_or(u32::MAX);
 
-    let mut client = match crate::potter_app_server_client::PotterAppServerClient::spawn(
+    let mut client = match crate::app_server::potter::PotterAppServerClient::spawn(
         workdir.to_path_buf(),
         codex_bin,
         rounds,
@@ -57,11 +64,11 @@ pub async fn run_exec_json(
     let mut buffered_events = Vec::new();
     let start_response = match client
         .project_start(
-            crate::potter_app_server_protocol::ProjectStartParams {
+            crate::app_server::potter::ProjectStartParams {
                 user_message: prompt.clone(),
                 cwd: Some(workdir.to_path_buf()),
                 rounds: Some(rounds_total_u32),
-                event_mode: Some(crate::potter_app_server_protocol::PotterEventMode::ExecJson),
+                event_mode: Some(crate::app_server::potter::PotterEventMode::ExecJson),
             },
             &mut buffered_events,
         )
@@ -79,8 +86,8 @@ pub async fn run_exec_json(
     let mut emitter = ExecJsonlEmitter::new(stdout.lock(), start_response.working_dir.clone());
 
     if emitter
-        .write_jsonl_event(&crate::exec_jsonl::ExecJsonlEvent::PotterProjectStarted(
-            crate::exec_jsonl::PotterProjectStartedEvent {
+        .write_jsonl_event(&crate::exec::ExecJsonlEvent::PotterProjectStarted(
+            crate::exec::PotterProjectStartedEvent {
                 working_dir: start_response.working_dir.to_string_lossy().to_string(),
                 project_dir: start_response.project_dir.to_string_lossy().to_string(),
                 progress_file: start_response.progress_file.to_string_lossy().to_string(),
@@ -164,7 +171,7 @@ pub async fn run_exec_json(
     if should_interrupt_project {
         let _ = client
             .project_interrupt(
-                crate::potter_app_server_protocol::ProjectInterruptParams {
+                crate::app_server::potter::ProjectInterruptParams {
                     project_id: start_response.project_id.clone(),
                 },
                 &mut Vec::new(),
@@ -177,9 +184,9 @@ pub async fn run_exec_json(
     });
     let (final_outcome_json, final_message) = exec_project_outcome(&final_outcome);
 
-    let git_commit_end = crate::project::resolve_git_commit(&start_response.working_dir);
-    let project_completed = crate::exec_jsonl::ExecJsonlEvent::PotterProjectCompleted(
-        crate::exec_jsonl::PotterProjectCompletedEvent {
+    let git_commit_end = crate::workflow::project::resolve_git_commit(&start_response.working_dir);
+    let project_completed = crate::exec::ExecJsonlEvent::PotterProjectCompleted(
+        crate::exec::PotterProjectCompletedEvent {
             outcome: final_outcome_json.clone(),
             message: final_message.clone(),
             rounds_run,
@@ -199,7 +206,7 @@ pub async fn run_exec_json(
 
     let exit_code = if matches!(
         final_outcome_json,
-        crate::exec_jsonl::PotterProjectCompletedOutcome::Succeeded
+        crate::exec::PotterProjectCompletedOutcome::Succeeded
     ) {
         0
     } else {
@@ -222,7 +229,7 @@ pub fn write_exec_json_preflight_error(message: &str) -> anyhow::Result<()> {
     let mut out = stdout.lock();
     write_jsonl_event(
         &mut out,
-        &crate::exec_jsonl::ExecJsonlEvent::Error(crate::exec_jsonl::ThreadErrorEvent {
+        &crate::exec::ExecJsonlEvent::Error(crate::exec::ThreadErrorEvent {
             message: message.to_string(),
         }),
     )
@@ -230,7 +237,7 @@ pub fn write_exec_json_preflight_error(message: &str) -> anyhow::Result<()> {
 
 fn write_jsonl_event<W: Write>(
     out: &mut W,
-    event: &crate::exec_jsonl::ExecJsonlEvent,
+    event: &crate::exec::ExecJsonlEvent,
 ) -> anyhow::Result<()> {
     serde_json::to_writer(&mut *out, event)?;
     out.write_all(b"\n")?;
@@ -247,7 +254,7 @@ enum ExecEventProgress {
 
 struct ExecJsonlEmitter<W: Write> {
     output: W,
-    processor: crate::exec_jsonl::ExecJsonlEventProcessor,
+    processor: crate::exec::ExecJsonlEventProcessor,
     json_turn_open: bool,
     round_in_progress: bool,
     rounds_run: u32,
@@ -257,7 +264,7 @@ impl<W: Write> ExecJsonlEmitter<W> {
     fn new(output: W, workdir: PathBuf) -> Self {
         Self {
             output,
-            processor: crate::exec_jsonl::ExecJsonlEventProcessor::with_workdir(workdir),
+            processor: crate::exec::ExecJsonlEventProcessor::with_workdir(workdir),
             json_turn_open: false,
             round_in_progress: false,
             rounds_run: 0,
@@ -268,20 +275,17 @@ impl<W: Write> ExecJsonlEmitter<W> {
         self.rounds_run
     }
 
-    fn write_jsonl_event(
-        &mut self,
-        event: &crate::exec_jsonl::ExecJsonlEvent,
-    ) -> anyhow::Result<()> {
+    fn write_jsonl_event(&mut self, event: &crate::exec::ExecJsonlEvent) -> anyhow::Result<()> {
         write_jsonl_event(&mut self.output, event).context("write exec jsonl event")?;
         self.observe_json_turn_state(event);
         Ok(())
     }
 
-    fn observe_json_turn_state(&mut self, event: &crate::exec_jsonl::ExecJsonlEvent) {
+    fn observe_json_turn_state(&mut self, event: &crate::exec::ExecJsonlEvent) {
         match event {
-            crate::exec_jsonl::ExecJsonlEvent::TurnStarted(_) => self.json_turn_open = true,
-            crate::exec_jsonl::ExecJsonlEvent::TurnCompleted(_)
-            | crate::exec_jsonl::ExecJsonlEvent::TurnFailed(_) => self.json_turn_open = false,
+            crate::exec::ExecJsonlEvent::TurnStarted(_) => self.json_turn_open = true,
+            crate::exec::ExecJsonlEvent::TurnCompleted(_)
+            | crate::exec::ExecJsonlEvent::TurnFailed(_) => self.json_turn_open = false,
             _ => {}
         }
     }
@@ -333,8 +337,8 @@ impl<W: Write> ExecJsonlEmitter<W> {
     }
 
     fn fail_fast_with_error(&mut self, message: String) -> anyhow::Result<()> {
-        self.write_jsonl_event(&crate::exec_jsonl::ExecJsonlEvent::Error(
-            crate::exec_jsonl::ThreadErrorEvent {
+        self.write_jsonl_event(&crate::exec::ExecJsonlEvent::Error(
+            crate::exec::ThreadErrorEvent {
                 message: message.clone(),
             },
         ))?;
@@ -344,9 +348,9 @@ impl<W: Write> ExecJsonlEmitter<W> {
 
     fn synthesize_round_fatal_closure(&mut self, message: &str) -> anyhow::Result<()> {
         if self.json_turn_open {
-            self.write_jsonl_event(&crate::exec_jsonl::ExecJsonlEvent::TurnFailed(
-                crate::exec_jsonl::TurnFailedEvent {
-                    error: crate::exec_jsonl::ThreadErrorEvent {
+            self.write_jsonl_event(&crate::exec::ExecJsonlEvent::TurnFailed(
+                crate::exec::TurnFailedEvent {
+                    error: crate::exec::ThreadErrorEvent {
                         message: message.to_string(),
                     },
                 },
@@ -354,9 +358,9 @@ impl<W: Write> ExecJsonlEmitter<W> {
         }
 
         if self.round_in_progress {
-            self.write_jsonl_event(&crate::exec_jsonl::ExecJsonlEvent::PotterRoundCompleted(
-                crate::exec_jsonl::PotterRoundCompletedEvent {
-                    outcome: crate::exec_jsonl::PotterRoundCompletedOutcome::Fatal,
+            self.write_jsonl_event(&crate::exec::ExecJsonlEvent::PotterRoundCompleted(
+                crate::exec::PotterRoundCompletedEvent {
+                    outcome: crate::exec::PotterRoundCompletedOutcome::Fatal,
                     message: Some(message.to_string()),
                 },
             ))?;
@@ -370,25 +374,21 @@ impl<W: Write> ExecJsonlEmitter<W> {
 
 fn exec_project_outcome(
     outcome: &PotterProjectOutcome,
-) -> (
-    crate::exec_jsonl::PotterProjectCompletedOutcome,
-    Option<String>,
-) {
+) -> (crate::exec::PotterProjectCompletedOutcome, Option<String>) {
     match outcome {
-        PotterProjectOutcome::Succeeded => (
-            crate::exec_jsonl::PotterProjectCompletedOutcome::Succeeded,
-            None,
-        ),
+        PotterProjectOutcome::Succeeded => {
+            (crate::exec::PotterProjectCompletedOutcome::Succeeded, None)
+        }
         PotterProjectOutcome::BudgetExhausted => (
-            crate::exec_jsonl::PotterProjectCompletedOutcome::BudgetExhausted,
+            crate::exec::PotterProjectCompletedOutcome::BudgetExhausted,
             None,
         ),
         PotterProjectOutcome::TaskFailed { message } => (
-            crate::exec_jsonl::PotterProjectCompletedOutcome::TaskFailed,
+            crate::exec::PotterProjectCompletedOutcome::TaskFailed,
             Some(message.clone()),
         ),
         PotterProjectOutcome::Fatal { message } => (
-            crate::exec_jsonl::PotterProjectCompletedOutcome::Fatal,
+            crate::exec::PotterProjectCompletedOutcome::Fatal,
             Some(message.clone()),
         ),
     }

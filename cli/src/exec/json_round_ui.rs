@@ -15,7 +15,7 @@ use codex_tui::ExitReason;
 
 pub struct ExecJsonRoundUi<W: Write> {
     output: W,
-    processor: crate::exec_jsonl::ExecJsonlEventProcessor,
+    processor: crate::exec::ExecJsonlEventProcessor,
     json_turn_open: bool,
     token_usage: TokenUsage,
     thread_id: Option<ThreadId>,
@@ -26,7 +26,7 @@ impl<W: Write> ExecJsonRoundUi<W> {
     pub fn new(output: W, workdir: PathBuf) -> Self {
         Self {
             output,
-            processor: crate::exec_jsonl::ExecJsonlEventProcessor::with_workdir(workdir),
+            processor: crate::exec::ExecJsonlEventProcessor::with_workdir(workdir),
             json_turn_open: false,
             token_usage: TokenUsage::default(),
             thread_id: None,
@@ -38,10 +38,7 @@ impl<W: Write> ExecJsonRoundUi<W> {
         self.output
     }
 
-    fn write_jsonl_event(
-        &mut self,
-        event: &crate::exec_jsonl::ExecJsonlEvent,
-    ) -> anyhow::Result<()> {
+    fn write_jsonl_event(&mut self, event: &crate::exec::ExecJsonlEvent) -> anyhow::Result<()> {
         serde_json::to_writer(&mut self.output, event).context("serialize exec jsonl event")?;
         self.output
             .write_all(b"\n")
@@ -50,11 +47,11 @@ impl<W: Write> ExecJsonRoundUi<W> {
         Ok(())
     }
 
-    fn observe_json_turn_state(&mut self, event: &crate::exec_jsonl::ExecJsonlEvent) {
+    fn observe_json_turn_state(&mut self, event: &crate::exec::ExecJsonlEvent) {
         match event {
-            crate::exec_jsonl::ExecJsonlEvent::TurnStarted(_) => self.json_turn_open = true,
-            crate::exec_jsonl::ExecJsonlEvent::TurnCompleted(_)
-            | crate::exec_jsonl::ExecJsonlEvent::TurnFailed(_) => self.json_turn_open = false,
+            crate::exec::ExecJsonlEvent::TurnStarted(_) => self.json_turn_open = true,
+            crate::exec::ExecJsonlEvent::TurnCompleted(_)
+            | crate::exec::ExecJsonlEvent::TurnFailed(_) => self.json_turn_open = false,
             _ => {}
         }
     }
@@ -81,8 +78,8 @@ impl<W: Write> ExecJsonRoundUi<W> {
     }
 
     fn fail_fast_with_error(&mut self, message: String) -> anyhow::Result<AppExitInfo> {
-        self.write_jsonl_event(&crate::exec_jsonl::ExecJsonlEvent::Error(
-            crate::exec_jsonl::ThreadErrorEvent {
+        self.write_jsonl_event(&crate::exec::ExecJsonlEvent::Error(
+            crate::exec::ThreadErrorEvent {
                 message: message.clone(),
             },
         ))?;
@@ -133,20 +130,19 @@ impl<W: Write> ExecJsonRoundUi<W> {
 
     fn synthesize_round_fatal_closure(&mut self, message: &str) -> anyhow::Result<()> {
         if self.json_turn_open {
-            let event =
-                crate::exec_jsonl::ExecJsonlEvent::TurnFailed(crate::exec_jsonl::TurnFailedEvent {
-                    error: crate::exec_jsonl::ThreadErrorEvent {
-                        message: message.to_string(),
-                    },
-                });
+            let event = crate::exec::ExecJsonlEvent::TurnFailed(crate::exec::TurnFailedEvent {
+                error: crate::exec::ThreadErrorEvent {
+                    message: message.to_string(),
+                },
+            });
             self.observe_json_turn_state(&event);
             self.write_jsonl_event(&event)?;
         }
 
         if !self.saw_round_finished {
-            self.write_jsonl_event(&crate::exec_jsonl::ExecJsonlEvent::PotterRoundCompleted(
-                crate::exec_jsonl::PotterRoundCompletedEvent {
-                    outcome: crate::exec_jsonl::PotterRoundCompletedOutcome::Fatal,
+            self.write_jsonl_event(&crate::exec::ExecJsonlEvent::PotterRoundCompleted(
+                crate::exec::PotterRoundCompletedEvent {
+                    outcome: crate::exec::PotterRoundCompletedOutcome::Fatal,
                     message: Some(message.to_string()),
                 },
             ))?;
@@ -157,13 +153,13 @@ impl<W: Write> ExecJsonRoundUi<W> {
     }
 }
 
-impl<W: Write> crate::round_runner::PotterRoundUi for ExecJsonRoundUi<W> {
+impl<W: Write> crate::workflow::round_runner::PotterRoundUi for ExecJsonRoundUi<W> {
     fn set_project_started_at(&mut self, _started_at: Instant) {}
 
     fn render_round<'a>(
         &'a mut self,
         params: codex_tui::RenderRoundParams,
-    ) -> crate::round_runner::UiFuture<'a, AppExitInfo> {
+    ) -> crate::workflow::round_runner::UiFuture<'a, AppExitInfo> {
         Box::pin(async move {
             let codex_tui::RenderRoundParams {
                 prompt,
@@ -253,7 +249,7 @@ fn exit_reason_from_outcome(outcome: &PotterRoundOutcome) -> ExitReason {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::round_runner::PotterRoundUi;
+    use crate::workflow::round_runner::PotterRoundUi;
     use codex_protocol::approvals::ElicitationRequestEvent;
     use codex_protocol::mcp::RequestId;
     use codex_protocol::protocol::TurnStartedEvent;
@@ -325,7 +321,7 @@ mod tests {
         let events = output
             .lines()
             .filter(|line| !line.trim().is_empty())
-            .map(serde_json::from_str::<crate::exec_jsonl::ExecJsonlEvent>)
+            .map(serde_json::from_str::<crate::exec::ExecJsonlEvent>)
             .collect::<Result<Vec<_>, _>>()
             .expect("parse JSONL");
 
@@ -333,26 +329,24 @@ mod tests {
         assert_eq!(
             events,
             vec![
-                crate::exec_jsonl::ExecJsonlEvent::PotterRoundStarted(
-                    crate::exec_jsonl::PotterRoundStartedEvent {
+                crate::exec::ExecJsonlEvent::PotterRoundStarted(
+                    crate::exec::PotterRoundStartedEvent {
                         current: 1,
                         total: 3
                     }
                 ),
-                crate::exec_jsonl::ExecJsonlEvent::TurnStarted(
-                    crate::exec_jsonl::TurnStartedEvent {}
-                ),
-                crate::exec_jsonl::ExecJsonlEvent::Error(crate::exec_jsonl::ThreadErrorEvent {
+                crate::exec::ExecJsonlEvent::TurnStarted(crate::exec::TurnStartedEvent {}),
+                crate::exec::ExecJsonlEvent::Error(crate::exec::ThreadErrorEvent {
                     message: expected_error_message.clone(),
                 }),
-                crate::exec_jsonl::ExecJsonlEvent::TurnFailed(crate::exec_jsonl::TurnFailedEvent {
-                    error: crate::exec_jsonl::ThreadErrorEvent {
+                crate::exec::ExecJsonlEvent::TurnFailed(crate::exec::TurnFailedEvent {
+                    error: crate::exec::ThreadErrorEvent {
                         message: expected_error_message.clone(),
                     },
                 }),
-                crate::exec_jsonl::ExecJsonlEvent::PotterRoundCompleted(
-                    crate::exec_jsonl::PotterRoundCompletedEvent {
-                        outcome: crate::exec_jsonl::PotterRoundCompletedOutcome::Fatal,
+                crate::exec::ExecJsonlEvent::PotterRoundCompleted(
+                    crate::exec::PotterRoundCompletedEvent {
+                        outcome: crate::exec::PotterRoundCompletedOutcome::Fatal,
                         message: Some(expected_error_message),
                     }
                 ),
@@ -416,30 +410,28 @@ mod tests {
         let events = output
             .lines()
             .filter(|line| !line.trim().is_empty())
-            .map(serde_json::from_str::<crate::exec_jsonl::ExecJsonlEvent>)
+            .map(serde_json::from_str::<crate::exec::ExecJsonlEvent>)
             .collect::<Result<Vec<_>, _>>()
             .expect("parse JSONL");
 
         assert_eq!(
             events,
             vec![
-                crate::exec_jsonl::ExecJsonlEvent::PotterRoundStarted(
-                    crate::exec_jsonl::PotterRoundStartedEvent {
+                crate::exec::ExecJsonlEvent::PotterRoundStarted(
+                    crate::exec::PotterRoundStartedEvent {
                         current: 1,
                         total: 3
                     }
                 ),
-                crate::exec_jsonl::ExecJsonlEvent::TurnStarted(
-                    crate::exec_jsonl::TurnStartedEvent {}
-                ),
-                crate::exec_jsonl::ExecJsonlEvent::TurnFailed(crate::exec_jsonl::TurnFailedEvent {
-                    error: crate::exec_jsonl::ThreadErrorEvent {
+                crate::exec::ExecJsonlEvent::TurnStarted(crate::exec::TurnStartedEvent {}),
+                crate::exec::ExecJsonlEvent::TurnFailed(crate::exec::TurnFailedEvent {
+                    error: crate::exec::ThreadErrorEvent {
                         message: "fatal exit".to_string(),
                     },
                 }),
-                crate::exec_jsonl::ExecJsonlEvent::PotterRoundCompleted(
-                    crate::exec_jsonl::PotterRoundCompletedEvent {
-                        outcome: crate::exec_jsonl::PotterRoundCompletedOutcome::Fatal,
+                crate::exec::ExecJsonlEvent::PotterRoundCompleted(
+                    crate::exec::PotterRoundCompletedEvent {
+                        outcome: crate::exec::PotterRoundCompletedOutcome::Fatal,
                         message: Some("fatal exit".to_string()),
                     }
                 ),

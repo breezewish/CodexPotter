@@ -8,8 +8,8 @@ use codex_protocol::protocol::PotterProjectOutcome;
 use codex_tui::ExitReason;
 use tokio::sync::mpsc::unbounded_channel;
 
-use crate::round_runner::PotterRoundUi;
-use crate::round_runner::UiFuture;
+use crate::workflow::round_runner::PotterRoundUi;
+use crate::workflow::round_runner::UiFuture;
 
 /// Event source for a running Potter project hosted by `codex-potter app-server`.
 pub trait PotterEventSource {

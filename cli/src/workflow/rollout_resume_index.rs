@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::PotterRoundOutcome;
 
-use crate::potter_rollout::PotterRolloutLine;
+use crate::workflow::rollout::PotterRolloutLine;
 
 #[derive(Debug, Clone)]
 pub struct PotterRolloutResumeIndex {

@@ -12,23 +12,24 @@ use tokio::process::ChildStdin;
 use tokio::process::ChildStdout;
 use tokio::process::Command;
 
-use crate::app_server_protocol::ClientInfo;
-use crate::app_server_protocol::InitializeParams;
-use crate::app_server_protocol::JSONRPCMessage;
-use crate::app_server_protocol::RequestId;
-use crate::app_server_protocol::Result as JsonRpcResult;
-use crate::potter_app_server_protocol::POTTER_EVENT_NOTIFICATION_METHOD;
-use crate::potter_app_server_protocol::PotterAppServerClientNotification;
-use crate::potter_app_server_protocol::PotterAppServerClientRequest;
-use crate::potter_app_server_protocol::ProjectInterruptParams;
-use crate::potter_app_server_protocol::ProjectListParams;
-use crate::potter_app_server_protocol::ProjectListResponse;
-use crate::potter_app_server_protocol::ProjectResumeParams;
-use crate::potter_app_server_protocol::ProjectResumeResponse;
-use crate::potter_app_server_protocol::ProjectStartParams;
-use crate::potter_app_server_protocol::ProjectStartResponse;
-use crate::potter_app_server_protocol::ProjectStartRoundsParams;
-use crate::potter_app_server_protocol::ProjectStartRoundsResponse;
+use crate::app_server::upstream_protocol::ClientInfo;
+use crate::app_server::upstream_protocol::InitializeParams;
+use crate::app_server::upstream_protocol::JSONRPCMessage;
+use crate::app_server::upstream_protocol::RequestId;
+use crate::app_server::upstream_protocol::Result as JsonRpcResult;
+
+use super::protocol::POTTER_EVENT_NOTIFICATION_METHOD;
+use super::protocol::PotterAppServerClientNotification;
+use super::protocol::PotterAppServerClientRequest;
+use super::protocol::ProjectInterruptParams;
+use super::protocol::ProjectListParams;
+use super::protocol::ProjectListResponse;
+use super::protocol::ProjectResumeParams;
+use super::protocol::ProjectResumeResponse;
+use super::protocol::ProjectStartParams;
+use super::protocol::ProjectStartResponse;
+use super::protocol::ProjectStartRoundsParams;
+use super::protocol::ProjectStartRoundsResponse;
 
 pub struct PotterAppServerClient {
     child: Child,
@@ -42,7 +43,7 @@ impl PotterAppServerClient {
         workdir: PathBuf,
         codex_bin: String,
         rounds: NonZeroUsize,
-        launch: crate::app_server_backend::AppServerLaunchConfig,
+        launch: crate::app_server::AppServerLaunchConfig,
     ) -> anyhow::Result<Self> {
         let exe = std::env::current_exe().context("resolve codex-potter executable path")?;
 
@@ -63,9 +64,13 @@ impl PotterAppServerClient {
         if let Some(mode) = launch.spawn_sandbox {
             cmd.arg("--sandbox");
             cmd.arg(match mode {
-                crate::app_server_protocol::SandboxMode::ReadOnly => "read-only",
-                crate::app_server_protocol::SandboxMode::WorkspaceWrite => "workspace-write",
-                crate::app_server_protocol::SandboxMode::DangerFullAccess => "danger-full-access",
+                crate::app_server::upstream_protocol::SandboxMode::ReadOnly => "read-only",
+                crate::app_server::upstream_protocol::SandboxMode::WorkspaceWrite => {
+                    "workspace-write"
+                }
+                crate::app_server::upstream_protocol::SandboxMode::DangerFullAccess => {
+                    "danger-full-access"
+                }
             });
         }
 
@@ -348,8 +353,10 @@ impl PotterAppServerClient {
     }
 }
 
-impl crate::potter_project_render_loop::PotterEventSource for PotterAppServerClient {
-    fn read_next_event<'a>(&'a mut self) -> crate::round_runner::UiFuture<'a, Option<Event>> {
+impl crate::workflow::project_render_loop::PotterEventSource for PotterAppServerClient {
+    fn read_next_event<'a>(
+        &'a mut self,
+    ) -> crate::workflow::round_runner::UiFuture<'a, Option<Event>> {
         Box::pin(PotterAppServerClient::read_next_event(self))
     }
 }

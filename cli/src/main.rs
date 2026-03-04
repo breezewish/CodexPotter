@@ -1,28 +1,12 @@
-mod app_server_backend;
-mod app_server_protocol;
+mod app_server;
 mod atomic_write;
 mod codex_compat;
 mod config;
 mod exec;
-#[cfg(test)]
-mod exec_json_round_ui;
-mod exec_jsonl;
 mod global_gitignore;
 mod path_utils;
-mod potter_app_server;
-mod potter_app_server_client;
-mod potter_app_server_protocol;
-mod potter_project_render_loop;
-mod potter_rollout;
-mod potter_rollout_resume_index;
-mod potter_stream_recovery;
-mod project;
-mod project_runner;
-mod prompt_queue;
-mod resume;
-mod resume_picker_index;
-mod round_runner;
 mod startup;
+mod workflow;
 
 use std::num::NonZeroUsize;
 use std::path::Path;
@@ -46,15 +30,17 @@ enum CliSandbox {
 }
 
 impl CliSandbox {
-    fn as_protocol(self) -> Option<crate::app_server_protocol::SandboxMode> {
+    fn as_protocol(self) -> Option<crate::app_server::upstream_protocol::SandboxMode> {
         match self {
             CliSandbox::Default => None,
-            CliSandbox::ReadOnly => Some(crate::app_server_protocol::SandboxMode::ReadOnly),
+            CliSandbox::ReadOnly => {
+                Some(crate::app_server::upstream_protocol::SandboxMode::ReadOnly)
+            }
             CliSandbox::WorkspaceWrite => {
-                Some(crate::app_server_protocol::SandboxMode::WorkspaceWrite)
+                Some(crate::app_server::upstream_protocol::SandboxMode::WorkspaceWrite)
             }
             CliSandbox::DangerFullAccess => {
-                Some(crate::app_server_protocol::SandboxMode::DangerFullAccess)
+                Some(crate::app_server::upstream_protocol::SandboxMode::DangerFullAccess)
             }
         }
     }
@@ -139,7 +125,7 @@ async fn main() -> anyhow::Result<()> {
             }
         };
 
-        let backend_launch = app_server_backend::AppServerLaunchConfig::from_cli(
+        let backend_launch = crate::app_server::AppServerLaunchConfig::from_cli(
             cli.sandbox,
             cli.dangerously_bypass_approvals_and_sandbox,
         );
@@ -152,8 +138,8 @@ async fn main() -> anyhow::Result<()> {
             }
         };
 
-        crate::potter_app_server::run_potter_app_server(
-            crate::potter_app_server::PotterAppServerConfig {
+        crate::app_server::potter::run_potter_app_server(
+            crate::app_server::potter::PotterAppServerConfig {
                 default_workdir: workdir,
                 codex_bin,
                 backend_launch,
@@ -190,7 +176,7 @@ async fn main() -> anyhow::Result<()> {
             }
         };
 
-        let backend_launch = app_server_backend::AppServerLaunchConfig::from_cli(
+        let backend_launch = crate::app_server::AppServerLaunchConfig::from_cli(
             cli.sandbox,
             cli.dangerously_bypass_approvals_and_sandbox,
         );
@@ -224,8 +210,10 @@ async fn main() -> anyhow::Result<()> {
 
     let workdir = std::env::current_dir().context("resolve current directory")?;
 
-    let backend_launch = app_server_backend::AppServerLaunchConfig::from_cli(sandbox, bypass);
-    let turn_prompt = crate::project::fixed_prompt().trim_end().to_string();
+    let backend_launch = crate::app_server::AppServerLaunchConfig::from_cli(sandbox, bypass);
+    let turn_prompt = crate::workflow::project::fixed_prompt()
+        .trim_end()
+        .to_string();
 
     let mut ui = codex_tui::CodexPotterTui::new()?;
 
@@ -243,7 +231,7 @@ async fn main() -> anyhow::Result<()> {
 
     let mut project_queue_workdir = workdir.clone();
 
-    let mut potter_app_server = crate::potter_app_server_client::PotterAppServerClient::spawn(
+    let mut potter_app_server = crate::app_server::potter::PotterAppServerClient::spawn(
         workdir.clone(),
         codex_bin.clone(),
         cli.rounds,
@@ -264,7 +252,7 @@ async fn main() -> anyhow::Result<()> {
                     let mut buffered_events = Vec::new();
                     let response = potter_app_server
                         .project_list(
-                            crate::potter_app_server_protocol::ProjectListParams::default(),
+                            crate::app_server::potter::ProjectListParams::default(),
                             &mut buffered_events,
                         )
                         .await
@@ -303,7 +291,7 @@ async fn main() -> anyhow::Result<()> {
         };
 
         if let Some(project_path) = project_path {
-            let resume_exit = crate::resume::run_resume(
+            let resume_exit = crate::workflow::resume::run_resume(
                 &mut ui,
                 &mut potter_app_server,
                 &workdir,
@@ -313,9 +301,9 @@ async fn main() -> anyhow::Result<()> {
             .await
             .context("resume project")?;
             match resume_exit {
-                crate::resume::ResumeExit::Completed => {}
-                crate::resume::ResumeExit::UserRequested => return Ok(()),
-                crate::resume::ResumeExit::FatalExitRequested => {
+                crate::workflow::resume::ResumeExit::Completed => {}
+                crate::workflow::resume::ResumeExit::UserRequested => return Ok(()),
+                crate::workflow::resume::ResumeExit::FatalExitRequested => {
                     // `std::process::exit` skips destructors, so explicitly drop the UI to restore
                     // terminal state before exiting.
                     drop(ui);
@@ -327,11 +315,11 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    let project_queue_exit = crate::project_runner::run_project_queue(
+    let project_queue_exit = crate::workflow::project_runner::run_project_queue(
         &mut ui,
         &mut potter_app_server,
         project_queue_workdir.clone(),
-        crate::project_runner::ProjectQueueOptions {
+        crate::workflow::project_runner::ProjectQueueOptions {
             // Keep the project queue interactive even after `resume` completes, so users can
             // continue queueing work (or simply wait) without restarting the CLI.
             allow_prompt_user: true,
@@ -342,14 +330,14 @@ async fn main() -> anyhow::Result<()> {
     .await?;
 
     match project_queue_exit {
-        crate::project_runner::ProjectQueueExit::Completed => {}
-        crate::project_runner::ProjectQueueExit::UserRequestedExit { project_dir } => {
+        crate::workflow::project_runner::ProjectQueueExit::Completed => {}
+        crate::workflow::project_runner::ProjectQueueExit::UserRequestedExit { project_dir } => {
             resume_note_project_path = Some(
                 derive_resume_project_path_from_project_dir(&project_dir)
                     .unwrap_or_else(|| project_dir.to_string_lossy().to_string()),
             );
         }
-        crate::project_runner::ProjectQueueExit::FatalExitRequested => {
+        crate::workflow::project_runner::ProjectQueueExit::FatalExitRequested => {
             // `std::process::exit` skips destructors, so explicitly drop the UI to restore terminal
             // state before exiting.
             drop(ui);

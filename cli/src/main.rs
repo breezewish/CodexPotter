@@ -110,26 +110,71 @@ fn parse_cli() -> Cli {
     Cli::from_arg_matches(&matches).unwrap_or_else(|err| err.exit())
 }
 
+fn resolve_codex_bin_or_exit(codex_bin: &str) -> String {
+    match startup::resolve_codex_bin(codex_bin) {
+        Ok(resolved) => resolved.command_for_spawn,
+        Err(err) => {
+            eprint!("{}", err.render_ansi());
+            std::process::exit(1);
+        }
+    }
+}
+
+fn resolve_workdir_or_exec_json_exit() -> PathBuf {
+    match std::env::current_dir() {
+        Ok(workdir) => workdir,
+        Err(err) => {
+            let message = format!("resolve current directory: {err}");
+            eprintln!("error: {message}");
+            let _ = crate::exec::write_exec_json_preflight_error(&message);
+            std::process::exit(1);
+        }
+    }
+}
+
+fn resolve_codex_bin_or_exec_json_exit(codex_bin: &str) -> String {
+    match startup::resolve_codex_bin(codex_bin) {
+        Ok(resolved) => resolved.command_for_spawn,
+        Err(err) => {
+            eprint!("{}", err.render_ansi());
+            let _ = crate::exec::write_exec_json_preflight_error(&err.to_string());
+            std::process::exit(1);
+        }
+    }
+}
+
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> anyhow::Result<()> {
     let cli = parse_cli();
+    let backend_launch = crate::app_server::AppServerLaunchConfig::from_cli(
+        cli.sandbox,
+        cli.dangerously_bypass_approvals_and_sandbox,
+    );
+
+    if let Some(CliCommand::Exec { prompt, json }) = cli.command.as_ref() {
+        if !json {
+            eprintln!("error: currently only --json output is supported for exec");
+            std::process::exit(1);
+        }
+
+        let workdir = resolve_workdir_or_exec_json_exit();
+        let codex_bin = resolve_codex_bin_or_exec_json_exit(&cli.codex_bin);
+
+        let exit_code = crate::exec::run_exec_json(
+            &workdir,
+            prompt.clone(),
+            cli.rounds,
+            codex_bin,
+            backend_launch,
+        )
+        .await;
+        std::process::exit(exit_code);
+    }
+
+    let workdir = std::env::current_dir().context("resolve current directory")?;
+    let codex_bin = resolve_codex_bin_or_exit(&cli.codex_bin);
 
     if matches!(cli.command, Some(CliCommand::AppServer)) {
-        let workdir = std::env::current_dir().context("resolve current directory")?;
-
-        let codex_bin = match startup::resolve_codex_bin(&cli.codex_bin) {
-            Ok(resolved) => resolved.command_for_spawn,
-            Err(err) => {
-                eprint!("{}", err.render_ansi());
-                std::process::exit(1);
-            }
-        };
-
-        let backend_launch = crate::app_server::AppServerLaunchConfig::from_cli(
-            cli.sandbox,
-            cli.dangerously_bypass_approvals_and_sandbox,
-        );
-
         let codex_compat_home = match crate::codex_compat::ensure_default_codex_compat_home() {
             Ok(home) => home,
             Err(err) => {
@@ -151,66 +196,11 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    if let Some(CliCommand::Exec { prompt, json }) = cli.command.as_ref() {
-        if !json {
-            eprintln!("error: currently only --json output is supported for exec");
-            std::process::exit(1);
-        }
-
-        let workdir = match std::env::current_dir() {
-            Ok(workdir) => workdir,
-            Err(err) => {
-                let message = format!("resolve current directory: {err}");
-                eprintln!("error: {message}");
-                let _ = crate::exec::write_exec_json_preflight_error(&message);
-                std::process::exit(1);
-            }
-        };
-
-        let codex_bin = match startup::resolve_codex_bin(&cli.codex_bin) {
-            Ok(resolved) => resolved.command_for_spawn,
-            Err(err) => {
-                eprint!("{}", err.render_ansi());
-                let _ = crate::exec::write_exec_json_preflight_error(&err.to_string());
-                std::process::exit(1);
-            }
-        };
-
-        let backend_launch = crate::app_server::AppServerLaunchConfig::from_cli(
-            cli.sandbox,
-            cli.dangerously_bypass_approvals_and_sandbox,
-        );
-
-        let exit_code = crate::exec::run_exec_json(
-            &workdir,
-            prompt.clone(),
-            cli.rounds,
-            codex_bin,
-            backend_launch,
-        )
-        .await;
-        std::process::exit(exit_code);
-    }
-
-    let bypass = cli.dangerously_bypass_approvals_and_sandbox;
-    let sandbox = cli.sandbox;
     let mut resume_note_project_path: Option<String> = None;
 
     let check_for_update_on_startup = crate::config::ConfigStore::new_default()
         .and_then(|store| store.check_for_update_on_startup())
         .unwrap_or(true);
-
-    let codex_bin = match startup::resolve_codex_bin(&cli.codex_bin) {
-        Ok(resolved) => resolved.command_for_spawn,
-        Err(err) => {
-            eprint!("{}", err.render_ansi());
-            std::process::exit(1);
-        }
-    };
-
-    let workdir = std::env::current_dir().context("resolve current directory")?;
-
-    let backend_launch = crate::app_server::AppServerLaunchConfig::from_cli(sandbox, bypass);
     let turn_prompt = crate::workflow::project::fixed_prompt()
         .trim_end()
         .to_string();

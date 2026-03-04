@@ -86,15 +86,16 @@ pub trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
 impl Renderable for Box<dyn HistoryCell> {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         let lines = self.display_lines(area.width);
+        let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
         let y = if area.height == 0 {
             0
         } else {
-            let overflow = lines.len().saturating_sub(usize::from(area.height));
+            let overflow = paragraph
+                .line_count(area.width)
+                .saturating_sub(usize::from(area.height));
             u16::try_from(overflow).unwrap_or(u16::MAX)
         };
-        Paragraph::new(Text::from(lines))
-            .scroll((y, 0))
-            .render(area, buf);
+        paragraph.scroll((y, 0)).render(area, buf);
     }
 
     fn desired_height(&self, width: u16) -> u16 {

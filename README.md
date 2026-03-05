@@ -82,8 +82,8 @@ CodexPotter is not suitable for such tasks:
 - [x] Skill popup
 - [x] Resume (history replay + continue iterating)
 - [x] Better handling of stream disconnect / similar network issues
+- [x] Agent-call friendly (non-interactive exec and resume)
 - [ ] Better plan / user selection support
-- [ ] Agent-call friendly (non-interactive exec and resume)
 - [ ] Better sandbox support
 - [ ] Interoperability with codex CLI sessions (for follow-up prompts)
 - [ ] Allow opting out knowledge base

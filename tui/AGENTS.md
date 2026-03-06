@@ -50,7 +50,7 @@ Divergences must be documented in places below to avoid regression when syncing 
 
 Behavior related
 
-- A customized banner on startup
+- A customized banner on startup; the first-screen model label appends `[fast]` when layered Codex config resolves `service_tier = "fast"`
 - Additionally shows gitignore startup hint
 - Multi-agent collab is transcript-only: no agent thread picker UI (no per-agent transcript view).
 - Resume picker UI exists for `codex-potter resume` (no path); it uses a `User Request` column (CodexPotter projects) instead of upstream `Conversation`.

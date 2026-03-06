@@ -221,3 +221,60 @@ pub fn build_verbosity_picker_params(current: Verbosity) -> SelectionViewParams 
         ..Default::default()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use insta::assert_snapshot;
+    use pretty_assertions::assert_eq;
+    use unicode_width::UnicodeWidthStr;
+
+    fn render_lines(renderable: &dyn Renderable, width: u16, height: u16) -> Vec<String> {
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = Buffer::empty(area);
+        renderable.render(area, &mut buf);
+        (0..height)
+            .map(|row| {
+                let mut line = String::new();
+                let mut col = 0u16;
+                while col < width {
+                    let symbol = buf[(col, row)].symbol();
+                    if symbol.is_empty() {
+                        line.push(' ');
+                        col = col.saturating_add(1);
+                        continue;
+                    }
+                    line.push_str(symbol);
+                    let symbol_width = UnicodeWidthStr::width(symbol);
+                    let advance = u16::try_from(symbol_width).unwrap_or(1).max(1);
+                    col = col.saturating_add(advance);
+                }
+                line
+            })
+            .collect()
+    }
+
+    #[test]
+    fn verbosity_picker_uses_half_width_with_stacked_fallback_preview() {
+        let params = build_verbosity_picker_params(Verbosity::default());
+        assert_eq!(params.side_content_width, SideContentWidth::Half);
+        assert_eq!(params.side_content_min_width, WIDE_PREVIEW_MIN_WIDTH);
+        assert!(params.stacked_side_content.is_some());
+    }
+
+    #[test]
+    fn verbosity_picker_wide_preview_snapshot_minimal() {
+        let selected = Arc::new(Mutex::new(Verbosity::Minimal));
+        let renderable = VerbosityPreviewWideRenderable { selected };
+        let lines = render_lines(&renderable, 64, 12).join("\n");
+        assert_snapshot!("verbosity_picker_wide_preview_minimal", lines);
+    }
+
+    #[test]
+    fn verbosity_picker_narrow_preview_snapshot_simple() {
+        let selected = Arc::new(Mutex::new(Verbosity::Simple));
+        let renderable = VerbosityPreviewNarrowRenderable { selected };
+        let lines = render_lines(&renderable, 64, 4).join("\n");
+        assert_snapshot!("verbosity_picker_narrow_preview_simple", lines);
+    }
+}

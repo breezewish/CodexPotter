@@ -15,6 +15,10 @@ expression: terminal.backend().vt100().screen().contents()
 
 
 
+
+
+
+
 › Explain this: `1 + 1`.
 
 
@@ -24,8 +28,4 @@ expression: terminal.backend().vt100().screen().contents()
 
   printf 'hello\n'
 
-• Ran printf 'line\n'
-
 • Edited example.txt (+1 -1)
-    1 -old
-    1 +new

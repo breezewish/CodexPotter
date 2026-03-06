@@ -1,0 +1,8 @@
+---
+source: tui/src/verbosity_picker.rs
+expression: lines
+---
+commentary is normal                                            
+• Ran                                                           
+  └ rg -n "verbosity" -S tui/src                                
+• Edited 2 files (+22 -0)

@@ -1,0 +1,12 @@
+---
+source: tui/src/diff_render.rs
+expression: terminal.backend()
+---
+"• Edited 2 files (+2 -1)                                                        "
+"  └ a.txt (+1 -1)                                                               "
+"    b.txt (+1 -0)                                                               "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "

@@ -1,0 +1,14 @@
+---
+source: tui/src/verbosity_picker.rs
+expression: lines
+---
+                                                                
+  我先对上 rollout 与渲染链路，再实现 /verbosity。              
+                                                                
+  • Edited 2 files (+22 -0)                                     
+    └ protocol/src/models.rs (+19 -0)                           
+      protocol/src/protocol.rs (+3 -0)                          
+                                                                
+  Ran/Explored are hidden in Minimal mode.                      
+                                                                
+  最终结论文本保持正常显示。

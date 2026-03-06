@@ -20,6 +20,7 @@ use ratatui::widgets::Wrap;
 use unicode_width::UnicodeWidthStr;
 
 use crate::CODEX_POTTER_VERSION;
+use crate::diff_render::create_compact_diff_summary;
 use crate::diff_render::create_diff_summary;
 use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
@@ -32,6 +33,7 @@ use crate::render::renderable::Renderable;
 use crate::style::user_message_style;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 use crate::update_action::UpdateAction;
+use crate::verbosity::Verbosity;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_lines;
 
@@ -504,19 +506,29 @@ impl HistoryCell for PlanUpdateCell {
 pub struct PatchHistoryCell {
     changes: HashMap<PathBuf, FileChange>,
     cwd: PathBuf,
+    compact: bool,
 }
 
 impl HistoryCell for PatchHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        create_diff_summary(&self.changes, &self.cwd, width as usize)
+        if self.compact {
+            create_compact_diff_summary(&self.changes, &self.cwd, width as usize)
+        } else {
+            create_diff_summary(&self.changes, &self.cwd, width as usize)
+        }
     }
 }
 
 /// Create a new patch cell that lists the file-level summary of a proposed patch.
-pub fn new_patch_event(changes: HashMap<PathBuf, FileChange>, cwd: &Path) -> PatchHistoryCell {
+pub fn new_patch_event(
+    changes: HashMap<PathBuf, FileChange>,
+    cwd: &Path,
+    verbosity: Verbosity,
+) -> PatchHistoryCell {
     PatchHistoryCell {
         changes,
         cwd: cwd.to_path_buf(),
+        compact: verbosity == Verbosity::Minimal,
     }
 }
 

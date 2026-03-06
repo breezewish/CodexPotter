@@ -346,6 +346,68 @@ pub fn create_diff_summary(
     render_changes_block(rows, wrap_cols, cwd)
 }
 
+pub fn create_compact_diff_summary(
+    changes: &HashMap<PathBuf, FileChange>,
+    cwd: &Path,
+    _wrap_cols: usize,
+) -> Vec<RtLine<'static>> {
+    let rows = collect_rows(changes);
+    let file_count = rows.len();
+
+    let render_path = |row: &Row| -> Vec<RtSpan<'static>> {
+        let mut spans = Vec::new();
+        spans.push(display_path_for(&row.path, cwd).into());
+        if let Some(move_path) = &row.move_path {
+            spans.push(format!(" → {}", display_path_for(move_path, cwd)).into());
+        }
+        spans
+    };
+
+    let mut out: Vec<RtLine<'static>> = Vec::new();
+
+    let total_added: usize = rows.iter().map(|row| row.added).sum();
+    let total_removed: usize = rows.iter().map(|row| row.removed).sum();
+    let noun = if file_count == 1 { "file" } else { "files" };
+
+    let mut header_spans: Vec<RtSpan<'static>> = vec!["• ".dim()];
+    if let [row] = &rows[..] {
+        let verb = match &row.change {
+            FileChange::Add { .. } => "Added",
+            FileChange::Delete { .. } => "Deleted",
+            _ => "Edited",
+        };
+        header_spans.push(verb.bold());
+        header_spans.push(" ".into());
+        header_spans.extend(render_path(row));
+        header_spans.push(" ".into());
+        header_spans.extend(render_line_count_summary(row.added, row.removed));
+    } else {
+        header_spans.push("Edited".bold());
+        header_spans.push(format!(" {file_count} {noun} ").into());
+        header_spans.extend(render_line_count_summary(total_added, total_removed));
+    }
+    out.push(RtLine::from(header_spans));
+
+    if file_count <= 1 {
+        return out;
+    }
+
+    for (idx, row) in rows.iter().enumerate() {
+        let mut file_spans: Vec<RtSpan<'static>> = Vec::new();
+        if idx == 0 {
+            file_spans.push("  └ ".dim());
+        } else {
+            file_spans.push("    ".dim());
+        }
+        file_spans.extend(render_path(row));
+        file_spans.push(" ".into());
+        file_spans.extend(render_line_count_summary(row.added, row.removed));
+        out.push(RtLine::from(file_spans));
+    }
+
+    out
+}
+
 // Shared row for per-file presentation
 #[derive(Clone)]
 struct Row {
@@ -1346,6 +1408,12 @@ mod tests {
         create_diff_summary(changes, &PathBuf::from("/"), 80)
     }
 
+    fn diff_summary_compact_for_tests(
+        changes: &HashMap<PathBuf, FileChange>,
+    ) -> Vec<RtLine<'static>> {
+        create_compact_diff_summary(changes, &PathBuf::from("/"), 80)
+    }
+
     fn snapshot_lines(name: &str, lines: Vec<RtLine<'static>>, width: u16, height: u16) {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
         terminal
@@ -1558,6 +1626,31 @@ mod tests {
         let lines = diff_summary_for_tests(&changes);
 
         snapshot_lines("apply_multiple_files_block", lines, 80, 14);
+    }
+
+    #[test]
+    fn ui_snapshot_apply_multiple_files_compact_block() {
+        // Two files: one update and one add, to exercise the compact header and file list.
+        let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
+
+        let patch_a = diffy::create_patch("one\n", "one changed\n").to_string();
+        changes.insert(
+            PathBuf::from("a.txt"),
+            FileChange::Update {
+                unified_diff: patch_a,
+                move_path: None,
+            },
+        );
+        changes.insert(
+            PathBuf::from("b.txt"),
+            FileChange::Add {
+                content: "new\n".to_string(),
+            },
+        );
+
+        let lines = diff_summary_compact_for_tests(&changes);
+
+        snapshot_lines("apply_multiple_files_compact_block", lines, 80, 8);
     }
 
     #[test]

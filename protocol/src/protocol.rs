@@ -12,6 +12,7 @@ use crate::ThreadId;
 use crate::approvals::ApplyPatchApprovalRequestEvent;
 use crate::approvals::ElicitationRequestEvent;
 use crate::approvals::ExecApprovalRequestEvent;
+use crate::models::MessagePhase;
 use crate::num_format::format_with_separators;
 use crate::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use crate::parse_command::ParsedCommand;
@@ -575,6 +576,8 @@ impl fmt::Display for FinalOutput {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AgentMessageEvent {
     pub message: String,
+    #[serde(default)]
+    pub phase: Option<MessagePhase>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

@@ -8,6 +8,7 @@ use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
+use codex_protocol::models::MessagePhase;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -15,6 +16,7 @@ use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::user_input::UserInput;
 use ratatui::prelude::Widget;
+use ratatui::style::Modifier;
 use ratatui::text::Line;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::mpsc::UnboundedSender;
@@ -654,7 +656,9 @@ impl AppServerEventProcessor {
                     return;
                 }
                 self.maybe_emit_final_message_separator();
-                self.emit_agent_message(&ev.message);
+                let dim_commentary = self.verbosity == Verbosity::Minimal
+                    && matches!(ev.phase, Some(MessagePhase::Commentary));
+                self.emit_agent_message(&ev.message, dim_commentary);
             }
             EventMsg::TurnComplete(_) => {
                 self.flush_pending_exploring_cell();
@@ -697,7 +701,7 @@ impl AppServerEventProcessor {
             EventMsg::ContextCompacted(_) => {
                 self.flush_pending_exploring_cell();
                 self.flush_pending_success_ran_cell();
-                self.emit_agent_message("Context compacted");
+                self.emit_agent_message("Context compacted", false);
             }
             EventMsg::DeprecationNotice(ev) => {
                 self.flush_pending_exploring_cell();
@@ -794,7 +798,7 @@ impl AppServerEventProcessor {
                 self.needs_final_message_separator = true;
                 if ev.success {
                     self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                        history_cell::new_patch_event(ev.changes, &self.cwd),
+                        history_cell::new_patch_event(ev.changes, &self.cwd, self.verbosity),
                     )));
                 } else {
                     self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
@@ -867,6 +871,9 @@ impl AppServerEventProcessor {
             return;
         };
         self.needs_final_message_separator = true;
+        if self.verbosity == Verbosity::Minimal {
+            return;
+        }
         self.app_event_tx
             .send(AppEvent::InsertHistoryCell(Box::new(cell)));
     }
@@ -876,6 +883,9 @@ impl AppServerEventProcessor {
             return;
         };
         self.needs_final_message_separator = true;
+        if self.verbosity == Verbosity::Minimal {
+            return;
+        }
         self.app_event_tx
             .send(AppEvent::InsertHistoryCell(Box::new(cell)));
     }
@@ -901,11 +911,19 @@ impl AppServerEventProcessor {
             && !call.is_unified_exec_interaction()
     }
 
-    fn emit_agent_message(&self, message: &str) {
+    fn emit_agent_message(&self, message: &str, dim: bool) {
         let mut lines: Vec<Line<'static>> = Vec::new();
         crate::markdown::append_markdown(message, None, &mut lines);
         if lines.is_empty() {
             return;
+        }
+        if dim {
+            for line in lines.iter_mut() {
+                line.style = line.style.add_modifier(Modifier::DIM);
+                for span in line.spans.iter_mut() {
+                    span.style = span.style.add_modifier(Modifier::DIM);
+                }
+            }
         }
         self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
             history_cell::AgentMessageCell::new(lines, true),
@@ -1030,16 +1048,18 @@ impl RenderAppState {
 
         let mut transient_lines: Vec<Line<'static>> = Vec::new();
 
-        if let Some(cell) = self.processor.pending_success_ran_cell.as_ref() {
-            transient_lines.push(Line::from(""));
-            transient_lines.extend(cell.display_lines(width));
-        }
+        if self.processor.verbosity == Verbosity::Simple {
+            if let Some(cell) = self.processor.pending_success_ran_cell.as_ref() {
+                transient_lines.push(Line::from(""));
+                transient_lines.extend(cell.display_lines(width));
+            }
 
-        if let Some(cell) = self.processor.pending_exploring_cell.as_ref() {
-            // Keep a blank line between the transcript (which may include a background-colored
-            // user prompt cell) and the live explored block.
-            transient_lines.push(Line::from(""));
-            transient_lines.extend(cell.display_lines(width));
+            if let Some(cell) = self.processor.pending_exploring_cell.as_ref() {
+                // Keep a blank line between the transcript (which may include a background-colored
+                // user prompt cell) and the live explored block.
+                transient_lines.push(Line::from(""));
+                transient_lines.extend(cell.display_lines(width));
+            }
         }
 
         if let Some(cell) = self.potter_stream_recovery_retry_cell.as_ref() {
@@ -3344,6 +3364,7 @@ mod tests {
             id: "agent-message".into(),
             msg: EventMsg::AgentMessage(AgentMessageEvent {
                 message: "hello".to_string(),
+                phase: None,
             }),
         });
 
@@ -3357,6 +3378,70 @@ mod tests {
 
         let cells = drain_history_cell_strings(&mut rx, width);
         pretty_assertions::assert_eq!(cells, vec![vec!["• hello".to_string()]]);
+    }
+
+    #[test]
+    fn round_renderer_minimal_dims_commentary_agent_messages() {
+        let width: u16 = 80;
+
+        let (mut proc, mut rx) = make_round_renderer_processor_without_prompt();
+
+        proc.handle_codex_event(Event {
+            id: "agent-message".into(),
+            msg: EventMsg::AgentMessage(AgentMessageEvent {
+                message: "hello".to_string(),
+                phase: Some(MessagePhase::Commentary),
+            }),
+        });
+
+        let Ok(AppEvent::InsertHistoryCell(cell)) = rx.try_recv() else {
+            panic!("expected an inserted history cell");
+        };
+        let lines = cell.display_lines(width);
+        let Some(content) = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .find(|span| span.content.as_ref().contains("hello"))
+        else {
+            panic!("expected hello span");
+        };
+
+        assert!(
+            content.style.add_modifier.contains(Modifier::DIM),
+            "expected commentary span to be dimmed"
+        );
+    }
+
+    #[test]
+    fn round_renderer_minimal_keeps_final_answer_agent_messages_normal() {
+        let width: u16 = 80;
+
+        let (mut proc, mut rx) = make_round_renderer_processor_without_prompt();
+
+        proc.handle_codex_event(Event {
+            id: "agent-message".into(),
+            msg: EventMsg::AgentMessage(AgentMessageEvent {
+                message: "done".to_string(),
+                phase: Some(MessagePhase::FinalAnswer),
+            }),
+        });
+
+        let Ok(AppEvent::InsertHistoryCell(cell)) = rx.try_recv() else {
+            panic!("expected an inserted history cell");
+        };
+        let lines = cell.display_lines(width);
+        let Some(content) = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .find(|span| span.content.as_ref().contains("done"))
+        else {
+            panic!("expected done span");
+        };
+
+        assert!(
+            !content.style.add_modifier.contains(Modifier::DIM),
+            "expected final answer span to keep normal intensity"
+        );
     }
 
     #[test]
@@ -3658,6 +3743,7 @@ mod tests {
         terminal.set_viewport_area(Rect::new(0, height - 1, width, 1));
 
         let (mut proc, mut rx) = make_round_renderer_processor("test prompt");
+        proc.verbosity = Verbosity::Simple;
         let mut has_emitted_history_lines = false;
         drain_render_history_events(
             &mut rx,
@@ -4130,7 +4216,7 @@ mod tests {
         let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
         let app_event_tx = AppEventSender::new(tx_raw);
 
-        let mut proc = AppServerEventProcessor::new(app_event_tx.clone(), Verbosity::default());
+        let mut proc = AppServerEventProcessor::new(app_event_tx.clone(), Verbosity::Simple);
         proc.handle_codex_event(Event {
             id: "session-start".into(),
             msg: EventMsg::PotterProjectStarted {
@@ -4306,10 +4392,60 @@ mod tests {
         );
     }
 
+    #[test]
+    fn round_renderer_minimal_hides_coalesced_success_ran_cells() {
+        let width: u16 = 80;
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let app_event_tx = AppEventSender::new(tx_raw);
+
+        let mut proc = AppServerEventProcessor::new(app_event_tx, Verbosity::default());
+
+        proc.handle_codex_event(Event {
+            id: "ran-1".into(),
+            msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+                call_id: "ran-1".into(),
+                process_id: None,
+                turn_id: "turn-1".into(),
+                command: vec!["bash".into(), "-lc".into(), "true".into()],
+                cwd: PathBuf::from("project"),
+                parsed_cmd: Vec::new(),
+                source: ExecCommandSource::Agent,
+                interaction_input: None,
+                stdout: String::new(),
+                stderr: String::new(),
+                aggregated_output: String::new(),
+                exit_code: 0,
+                duration: std::time::Duration::from_millis(1),
+                formatted_output: String::new(),
+            }),
+        });
+
+        proc.handle_codex_event(Event {
+            id: "agent-message".into(),
+            msg: EventMsg::AgentMessage(AgentMessageEvent {
+                message: "ok".into(),
+                phase: None,
+            }),
+        });
+
+        let events = drain_history_cell_strings(&mut rx, width);
+        let [separator, agent_message] = events.as_slice() else {
+            panic!("expected separator, then agent message");
+        };
+        assert!(
+            separator
+                .first()
+                .is_some_and(|line| line.chars().all(|ch| ch == '─')),
+            "expected a final message separator"
+        );
+        pretty_assertions::assert_eq!(agent_message, &vec!["• ok".to_string()]);
+    }
+
     #[tokio::test]
     async fn round_renderer_coalesces_explored_cells() {
         let (mut proc, mut rx) = make_round_renderer_processor("test prompt");
         let _ = drain_history_cell_strings(&mut rx, 80);
+        proc.verbosity = Verbosity::Simple;
 
         let base = ExecCommandEndEvent {
             call_id: "unused".into(),
@@ -4392,6 +4528,7 @@ mod tests {
             id: "agent-message".into(),
             msg: EventMsg::AgentMessage(AgentMessageEvent {
                 message: "ok".into(),
+                phase: None,
             }),
         });
 
@@ -4404,9 +4541,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn round_renderer_minimal_hides_explored_cells() {
+        let (mut proc, mut rx) = make_round_renderer_processor("test prompt");
+        let _ = drain_history_cell_strings(&mut rx, 80);
+
+        let base = ExecCommandEndEvent {
+            call_id: "unused".into(),
+            process_id: None,
+            turn_id: "turn-1".into(),
+            command: vec!["bash".into(), "-lc".into(), "true".into()],
+            cwd: PathBuf::from("project"),
+            parsed_cmd: Vec::new(),
+            source: ExecCommandSource::Agent,
+            interaction_input: None,
+            stdout: String::new(),
+            stderr: String::new(),
+            aggregated_output: String::new(),
+            exit_code: 0,
+            duration: std::time::Duration::from_millis(1),
+            formatted_output: String::new(),
+        };
+
+        proc.handle_codex_event(Event {
+            id: "explore-1".into(),
+            msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+                call_id: "explore-1".into(),
+                parsed_cmd: vec![ParsedCommand::Read {
+                    cmd: "cat".into(),
+                    name: "AGENTS.override.md".into(),
+                    path: PathBuf::from("AGENTS.override.md"),
+                }],
+                ..base
+            }),
+        });
+
+        proc.handle_codex_event(Event {
+            id: "agent-message".into(),
+            msg: EventMsg::AgentMessage(AgentMessageEvent {
+                message: "ok".into(),
+                phase: None,
+            }),
+        });
+
+        let events = drain_history_cell_strings(&mut rx, 80);
+        let [separator, agent_message] = events.as_slice() else {
+            panic!("expected separator, then agent message");
+        };
+        assert!(
+            separator
+                .first()
+                .is_some_and(|line| line.chars().all(|ch| ch == '─')),
+            "expected a final message separator"
+        );
+        pretty_assertions::assert_eq!(agent_message, &vec!["• ok".to_string()]);
+    }
+
+    #[tokio::test]
     async fn round_renderer_flushes_explored_cells_on_turn_complete() {
         let (mut proc, mut rx) = make_round_renderer_processor("test prompt");
         let _ = drain_history_cell_strings(&mut rx, u16::MAX);
+        proc.verbosity = Verbosity::Simple;
 
         proc.handle_codex_event(Event {
             id: "explore-1".into(),

@@ -115,6 +115,7 @@ mod tests {
     use super::v2::ThreadResumeParams;
     use super::v2::ThreadRollbackParams;
     use super::v2::ThreadStartParams;
+    use super::v2::TurnInterruptParams;
     use super::v2::TurnStartParams;
     use super::*;
 
@@ -252,6 +253,32 @@ mod tests {
                 "turn/start params must contain key {key}"
             );
         }
+    }
+
+    #[test]
+    fn serialize_turn_interrupt_includes_thread_and_turn_id() {
+        let request = ClientRequest::TurnInterrupt {
+            request_id: RequestId::Integer(5),
+            params: TurnInterruptParams {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+            },
+        };
+
+        let value = serde_json::to_value(&request).expect("serialize request");
+        assert_eq!(value["method"], "turn/interrupt");
+        assert_eq!(value["id"], 5);
+
+        let params = value["params"].as_object().expect("params object");
+        for key in ["threadId", "turnId"] {
+            assert!(
+                params.contains_key(key),
+                "turn/interrupt params must contain key {key}"
+            );
+        }
+
+        assert_eq!(value["params"]["threadId"], "thread-1");
+        assert_eq!(value["params"]["turnId"], "turn-1");
     }
 
     #[test]

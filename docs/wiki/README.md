@@ -17,6 +17,7 @@ Recommended reading order (new contributors):
    and status header updates.
 10. `file-search.md` - How `@` file search works (session orchestration + popup insertion).
 11. `tui-chat-composer.md` - Bottom-pane input state machine notes (`ChatComposer`).
+12. `interactive-testing.md` - Testing interactive flows (dummy app-server + VT100 snapshots).
 
 ## Documentation conventions
 

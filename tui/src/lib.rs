@@ -36,6 +36,7 @@ mod potter_tui;
 mod prompt_history_store;
 mod render;
 mod resume_picker_prompt;
+mod selection_list;
 mod shimmer;
 mod skills_discovery;
 mod slash_command;

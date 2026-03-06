@@ -30,6 +30,8 @@ const POTTER_ASCII_ART: &[&str] = &[
 ];
 
 const ASCII_INDENT: &str = "  ";
+const FAST_LABEL_SUFFIX: &str = "[fast]";
+const FAST_LABEL_WITH_SEPARATOR: &str = " [fast]";
 // Bold split positions (0-based, within each ASCII art line after trimming trailing spaces).
 const ASCII_BOLD_SPLIT_COLS: [usize; 9] = [52, 51, 38, 37, 37, 38, 38, 40, 41];
 
@@ -52,6 +54,29 @@ fn take_prefix_by_width(text: &str, max_width: usize) -> &str {
         end = idx + ch.len_utf8();
     }
     &text[..end]
+}
+
+fn truncate_model_label_for_banner(text: &str, max_width: usize) -> String {
+    if max_width == 0 {
+        return String::new();
+    }
+    if UnicodeWidthStr::width(text) <= max_width {
+        return text.to_string();
+    }
+
+    if let Some(base) = text.strip_suffix(FAST_LABEL_WITH_SEPARATOR)
+        && UnicodeWidthStr::width(FAST_LABEL_SUFFIX) <= max_width
+    {
+        let available_base_width =
+            max_width.saturating_sub(UnicodeWidthStr::width(FAST_LABEL_WITH_SEPARATOR));
+        let truncated_base = take_prefix_by_width(base, available_base_width);
+        if truncated_base.is_empty() {
+            return FAST_LABEL_SUFFIX.to_string();
+        }
+        return format!("{truncated_base}{FAST_LABEL_WITH_SEPARATOR}");
+    }
+
+    take_prefix_by_width(text, max_width).to_string()
 }
 
 /// Build the startup banner as plain `Line`s, sized to fit within `width`.
@@ -120,11 +145,23 @@ pub fn build_startup_banner_lines(
 
     let dir_label = "directory: ";
     let dir_prefix_width = UnicodeWidthStr::width(ASCII_INDENT) + UnicodeWidthStr::width(dir_label);
-    let model_gap_width = if model_label.is_empty() { 0 } else { 2 };
-    let model_label_width = UnicodeWidthStr::width(model_label);
-    let dir_max_width = usize::from(width)
-        .saturating_sub(dir_prefix_width + model_gap_width + model_label_width)
-        .max(1);
+    let available_tail_width = usize::from(width).saturating_sub(dir_prefix_width);
+    let min_dir_width = usize::from(available_tail_width > 0);
+
+    let mut model_display = model_label.to_string();
+    let mut model_gap_width = if model_label.is_empty() { 0 } else { 2 };
+    if model_gap_width + UnicodeWidthStr::width(model_display.as_str()) + min_dir_width
+        > available_tail_width
+    {
+        let max_model_width = available_tail_width.saturating_sub(model_gap_width + min_dir_width);
+        model_display = truncate_model_label_for_banner(model_label, max_model_width);
+        if model_display.is_empty() {
+            model_gap_width = 0;
+        }
+    }
+
+    let model_label_width = UnicodeWidthStr::width(model_display.as_str());
+    let dir_max_width = available_tail_width.saturating_sub(model_gap_width + model_label_width);
     let dir_display = format_directory_for_display(directory, Some(dir_max_width));
 
     let mut directory_spans: Vec<Span<'static>> = vec![
@@ -132,10 +169,10 @@ pub fn build_startup_banner_lines(
         Span::from(dir_label).dim(),
         Span::from(dir_display),
     ];
-    if !model_label.is_empty() {
+    if !model_display.is_empty() {
         directory_spans.push(Span::from("  "));
         directory_spans.push(Span::styled(
-            model_label.to_string(),
+            model_display,
             Style::default().fg(orange_color()).bold(),
         ));
     }
@@ -201,6 +238,28 @@ mod tests {
         assert!(
             text.ends_with("v0.0.1"),
             "version line must end with version label: {text:?}",
+        );
+    }
+
+    #[test]
+    fn startup_banner_truncates_directory_line_and_keeps_fast_suffix_visible() {
+        let dir = Path::new("/Users/example/repo");
+        let width: u16 = 30;
+        let lines = build_startup_banner_lines(width, "0.0.1", "gpt-5.2 xhigh [fast]", dir);
+
+        let directory_line = &lines[POTTER_ASCII_ART.len() + 1];
+        let text: String = directory_line
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert!(
+            UnicodeWidthStr::width(text.as_str()) <= usize::from(width),
+            "directory line must fit within {width} cols: {text:?}",
+        );
+        assert!(
+            text.ends_with("gpt-5.2 [fast]"),
+            "expected fast suffix to remain visible after truncation: {text:?}",
         );
     }
 }

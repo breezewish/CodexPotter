@@ -41,6 +41,9 @@ use crate::wrapping::word_wrap_lines;
 /// Returns:
 /// - `Ok(Some(verbosity))` when the user selected an option
 /// - `Ok(None)` when the prompt was cancelled (Esc / Ctrl+C)
+///
+/// When `setup_step` is provided, the prompt may render a `Setup X/Y` marker so users understand
+/// how many onboarding prompts remain.
 pub async fn run_startup_verbosity_prompt_with_tui(
     tui: &mut Tui,
     setup_step: Option<StartupSetupStep>,

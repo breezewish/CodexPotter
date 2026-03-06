@@ -114,6 +114,9 @@ impl CodexPotterTui {
     ///
     /// This avoids tearing down and re-initializing the terminal between prompts, which can race
     /// with crossterm's stdin reader and break subsequent cursor-position queries.
+    ///
+    /// When `setup_step` is provided, the prompt may render a `Setup X/Y` marker so users
+    /// understand how many onboarding prompts remain.
     pub async fn prompt_global_gitignore(
         &mut self,
         global_gitignore_path_display: String,
@@ -133,10 +136,22 @@ impl CodexPotterTui {
         result
     }
 
+    /// Returns `true` when startup should prompt the user to pick a default verbosity level.
+    ///
+    /// This is used for first-run onboarding when no persisted `[tui].verbosity` is configured
+    /// yet.
     pub fn should_prompt_startup_verbosity(&self) -> bool {
         self.needs_startup_verbosity_prompt
     }
 
+    /// Prompt the user to select a default verbosity level and persist it to disk.
+    ///
+    /// The prompt is intended to be shown on startup before entering the main composer UI.
+    ///
+    /// When `setup_step` is provided, the prompt may render a `Setup X/Y` marker so users
+    /// understand how many onboarding prompts remain.
+    ///
+    /// Cancelled prompts (Esc / Ctrl+C) leave the verbosity unchanged and do not persist.
     pub async fn prompt_startup_verbosity(
         &mut self,
         setup_step: Option<crate::StartupSetupStep>,

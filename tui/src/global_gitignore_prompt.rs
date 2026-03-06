@@ -49,6 +49,9 @@ pub enum GlobalGitignorePromptOutcome {
 
 /// When the global gitignore does not ignore `.codexpotter/`, show a
 /// recommendation prompt and return the user's selection.
+///
+/// When `setup_step` is provided, the prompt may render a `Setup X/Y` marker so users understand
+/// how many onboarding prompts remain.
 pub async fn run_global_gitignore_prompt(
     global_gitignore_path_display: String,
     setup_step: Option<StartupSetupStep>,
@@ -74,6 +77,9 @@ pub async fn run_global_gitignore_prompt(
 ///
 /// This avoids tearing down and re-initializing the terminal between prompts, which can race with
 /// crossterm's stdin reader and break subsequent cursor-position queries.
+///
+/// When `setup_step` is provided, the prompt may render a `Setup X/Y` marker so users understand
+/// how many onboarding prompts remain.
 pub async fn run_global_gitignore_prompt_with_tui(
     tui: &mut Tui,
     global_gitignore_path_display: String,

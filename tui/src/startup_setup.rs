@@ -11,6 +11,9 @@ pub struct StartupSetupStep {
 }
 
 impl StartupSetupStep {
+    /// Create a new setup step marker.
+    ///
+    /// `index` is 1-based and must be <= `total`.
     pub fn new(index: usize, total: usize) -> Self {
         debug_assert!(index > 0, "setup step index must be 1-based");
         debug_assert!(total > 0, "setup step total must be > 0");
@@ -18,10 +21,15 @@ impl StartupSetupStep {
         Self { index, total }
     }
 
+    /// Returns `true` when the marker should be rendered.
+    ///
+    /// `codex-potter` currently only shows setup markers when there are multiple onboarding
+    /// prompts, to avoid a noisy `Setup 1/1` header.
     pub fn should_render(self) -> bool {
         self.total > 1
     }
 
+    /// Format the marker label as `Setup X/Y`.
     pub fn label(self) -> String {
         format!("Setup {}/{}", self.index, self.total)
     }

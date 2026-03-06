@@ -115,10 +115,14 @@ The TUI submits `Op::UserInput { items, final_output_json_schema }` which the br
 - input items: converted into app-server `UserInput` values (`protocol/v2.rs`)
 - output schema: forwarded as `outputSchema`
 
-Other `Op` variants are intentionally ignored in potter mode:
+Other `Op` variants handled by the bridge:
 
-- `Op::Interrupt`: the round renderer does not track a turn id, so `turn/interrupt` cannot be
-  called.
+- `Op::Interrupt`: requests cancellation of the currently active turn by issuing `turn/interrupt`.
+  The bridge tracks the active turn id from:
+  - the `turn/start` response payload (`TurnStartResponse.turn.id`), and
+  - `codex/event/turn_started` notifications.
+  If the turn already completed, upstream may reply with JSON-RPC `-32600` (`INVALID_REQUEST`),
+  which the bridge treats as a no-op.
 - `Op::GetHistoryEntryRequest`: prompt history is stored locally by `codex-potter` and not fetched
   from the app-server.
 

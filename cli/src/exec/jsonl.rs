@@ -1242,6 +1242,7 @@ mod tests {
 
         let out = ep.collect_event(&EventMsg::AgentMessage(AgentMessageEvent {
             message: "hello".to_string(),
+            phase: None,
         }));
         assert_eq!(
             out,

@@ -764,14 +764,24 @@ fn handle_codex_event(
         EventMsg::TurnStarted(ev) if !ev.turn_id.is_empty() => {
             recovery.active_turn_id = Some(ev.turn_id.clone());
         }
-        EventMsg::TurnComplete(_) => {
-            recovery.active_turn_id = None;
+        EventMsg::TurnComplete(ev) => {
+            if ev.turn_id.is_empty()
+                || recovery.active_turn_id.as_deref() == Some(ev.turn_id.as_str())
+            {
+                recovery.active_turn_id = None;
+            }
         }
-        EventMsg::TurnAborted(ev)
-            if ev.reason != codex_protocol::protocol::TurnAbortReason::Replaced =>
-        {
-            recovery.active_turn_id = None;
-        }
+        EventMsg::TurnAborted(ev) => match ev.turn_id.as_deref() {
+            Some(turn_id) => {
+                if recovery.active_turn_id.as_deref() == Some(turn_id) {
+                    recovery.active_turn_id = None;
+                }
+            }
+            None if ev.reason != codex_protocol::protocol::TurnAbortReason::Replaced => {
+                recovery.active_turn_id = None;
+            }
+            None => {}
+        },
         _ => {}
     }
 
@@ -1568,11 +1578,169 @@ mod stream_recovery_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_protocol::protocol::TurnAbortReason;
+    use codex_protocol::protocol::TurnAbortedEvent;
     use codex_protocol::protocol::TurnCompleteEvent;
     use codex_protocol::user_input::UserInput;
+    use pretty_assertions::assert_eq;
     use tokio::sync::mpsc::unbounded_channel;
     use tokio::time::Duration;
     use tokio::time::timeout;
+
+    #[test]
+    fn active_turn_id_is_not_cleared_by_unrelated_turn_complete() {
+        let (event_tx, _event_rx) = unbounded_channel::<Event>();
+        let (recovery_action_tx, _recovery_action_rx) = unbounded_channel::<RecoveryAction>();
+
+        let mut recovery = StreamRecoveryContext {
+            stream_recovery: PotterStreamRecovery::new(),
+            recovery_action_tx,
+            pending_continue_retry: None,
+            active_turn_id: Some("turn-new".to_string()),
+            has_sent_turn_start: true,
+            has_finished_round: false,
+            last_turn_start_was_recovery_continue: false,
+            event_mode: AppServerEventMode::Interactive,
+        };
+
+        handle_codex_event(
+            Event {
+                id: "tc-1".to_string(),
+                msg: EventMsg::TurnComplete(TurnCompleteEvent {
+                    turn_id: "turn-old".to_string(),
+                    last_agent_message: None,
+                }),
+            },
+            &mut recovery,
+            &event_tx,
+        );
+
+        assert_eq!(recovery.active_turn_id.as_deref(), Some("turn-new"));
+    }
+
+    #[test]
+    fn active_turn_id_is_cleared_by_matching_turn_complete() {
+        let (event_tx, _event_rx) = unbounded_channel::<Event>();
+        let (recovery_action_tx, _recovery_action_rx) = unbounded_channel::<RecoveryAction>();
+
+        let mut recovery = StreamRecoveryContext {
+            stream_recovery: PotterStreamRecovery::new(),
+            recovery_action_tx,
+            pending_continue_retry: None,
+            active_turn_id: Some("turn-1".to_string()),
+            has_sent_turn_start: true,
+            has_finished_round: false,
+            last_turn_start_was_recovery_continue: false,
+            event_mode: AppServerEventMode::Interactive,
+        };
+
+        handle_codex_event(
+            Event {
+                id: "tc-1".to_string(),
+                msg: EventMsg::TurnComplete(TurnCompleteEvent {
+                    turn_id: "turn-1".to_string(),
+                    last_agent_message: None,
+                }),
+            },
+            &mut recovery,
+            &event_tx,
+        );
+
+        assert_eq!(recovery.active_turn_id, None);
+    }
+
+    #[test]
+    fn active_turn_id_is_not_cleared_by_unrelated_turn_aborted() {
+        let (event_tx, _event_rx) = unbounded_channel::<Event>();
+        let (recovery_action_tx, _recovery_action_rx) = unbounded_channel::<RecoveryAction>();
+
+        let mut recovery = StreamRecoveryContext {
+            stream_recovery: PotterStreamRecovery::new(),
+            recovery_action_tx,
+            pending_continue_retry: None,
+            active_turn_id: Some("turn-new".to_string()),
+            has_sent_turn_start: true,
+            has_finished_round: false,
+            last_turn_start_was_recovery_continue: false,
+            event_mode: AppServerEventMode::Interactive,
+        };
+
+        handle_codex_event(
+            Event {
+                id: "ta-1".to_string(),
+                msg: EventMsg::TurnAborted(TurnAbortedEvent {
+                    turn_id: Some("turn-old".to_string()),
+                    reason: TurnAbortReason::Interrupted,
+                }),
+            },
+            &mut recovery,
+            &event_tx,
+        );
+
+        assert_eq!(recovery.active_turn_id.as_deref(), Some("turn-new"));
+    }
+
+    #[test]
+    fn active_turn_id_is_cleared_by_matching_turn_aborted() {
+        let (event_tx, _event_rx) = unbounded_channel::<Event>();
+        let (recovery_action_tx, _recovery_action_rx) = unbounded_channel::<RecoveryAction>();
+
+        let mut recovery = StreamRecoveryContext {
+            stream_recovery: PotterStreamRecovery::new(),
+            recovery_action_tx,
+            pending_continue_retry: None,
+            active_turn_id: Some("turn-1".to_string()),
+            has_sent_turn_start: true,
+            has_finished_round: false,
+            last_turn_start_was_recovery_continue: false,
+            event_mode: AppServerEventMode::Interactive,
+        };
+
+        handle_codex_event(
+            Event {
+                id: "ta-1".to_string(),
+                msg: EventMsg::TurnAborted(TurnAbortedEvent {
+                    turn_id: Some("turn-1".to_string()),
+                    reason: TurnAbortReason::Interrupted,
+                }),
+            },
+            &mut recovery,
+            &event_tx,
+        );
+
+        assert_eq!(recovery.active_turn_id, None);
+    }
+
+    #[test]
+    fn active_turn_id_is_preserved_by_replaced_without_turn_id() {
+        let (event_tx, _event_rx) = unbounded_channel::<Event>();
+        let (recovery_action_tx, _recovery_action_rx) = unbounded_channel::<RecoveryAction>();
+
+        let mut recovery = StreamRecoveryContext {
+            stream_recovery: PotterStreamRecovery::new(),
+            recovery_action_tx,
+            pending_continue_retry: None,
+            active_turn_id: Some("turn-1".to_string()),
+            has_sent_turn_start: true,
+            has_finished_round: false,
+            last_turn_start_was_recovery_continue: false,
+            event_mode: AppServerEventMode::Interactive,
+        };
+
+        handle_codex_event(
+            Event {
+                id: "ta-1".to_string(),
+                msg: EventMsg::TurnAborted(TurnAbortedEvent {
+                    turn_id: None,
+                    reason: TurnAbortReason::Replaced,
+                }),
+            },
+            &mut recovery,
+            &event_tx,
+        );
+
+        assert_eq!(recovery.active_turn_id.as_deref(), Some("turn-1"));
+    }
 
     #[cfg(unix)]
     #[tokio::test]

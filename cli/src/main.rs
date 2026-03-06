@@ -444,9 +444,10 @@ fn render_queued_prompts_note(queued_prompts: &[String]) -> Option<String> {
     let mut note = String::new();
     note.push('\n');
     note.push_str(&format!(
-        "{} You have {count} queued {prompt_label} that {verb} not run before exit:\n",
+        "{} You have {count} queued {prompt_label} that {verb} not run before exiting.\n",
         ansi_bold("Warning:")
     ));
+    note.push_str("Copy/paste them to continue:\n");
 
     for (idx, prompt) in queued_prompts.iter().enumerate() {
         let index = idx + 1;
@@ -655,7 +656,7 @@ mod tests {
 
         let output = render_queued_prompts_note(&prompts).expect("note");
         let expected = format!(
-            "\n{} You have 2 queued prompts that were not run before exit:\n--- queued prompt 1/2 ---\n{}--- end queued prompt 1/2 ---\n--- queued prompt 2/2 ---\n{}\n--- end queued prompt 2/2 ---\n",
+            "\n{} You have 2 queued prompts that were not run before exiting.\nCopy/paste them to continue:\n--- queued prompt 1/2 ---\n{}--- end queued prompt 1/2 ---\n--- queued prompt 2/2 ---\n{}\n--- end queued prompt 2/2 ---\n",
             ansi_bold("Warning:"),
             prompts[0],
             prompts[1],

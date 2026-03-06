@@ -2822,6 +2822,53 @@ mod tests {
     }
 
     #[test]
+    fn round_renderer_esc_requests_interrupt_when_task_is_running() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx_raw, mut rx_app) = unbounded_channel::<AppEvent>();
+        let app_event_tx = AppEventSender::new(tx_raw);
+
+        let processor = AppServerEventProcessor::new(app_event_tx.clone(), Verbosity::default());
+        let (op_tx, _op_rx) = unbounded_channel::<Op>();
+        let bottom_pane = BottomPane::new(BottomPaneParams {
+            frame_requester: crate::tui::FrameRequester::test_dummy(),
+            enhanced_keys_supported: false,
+            app_event_tx: app_event_tx.clone(),
+            animations_enabled: false,
+            placeholder_text: "Assign new task to CodexPotter".to_string(),
+            disable_paste_burst: false,
+        });
+        let file_search = FileSearchManager::new(std::env::temp_dir(), app_event_tx.clone());
+        let mut app = RenderAppState::new(
+            processor,
+            app_event_tx,
+            Some(op_tx),
+            bottom_pane,
+            crate::prompt_history_store::PromptHistoryStore::new(),
+            file_search,
+            VecDeque::new(),
+        );
+
+        app.bottom_pane.set_task_running(true);
+        app.handle_key_event(
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+            crate::tui::FrameRequester::test_dummy(),
+            80,
+        );
+
+        let mut saw_interrupt = false;
+        while let Ok(ev) = rx_app.try_recv() {
+            if let AppEvent::CodexOp(Op::Interrupt) = ev {
+                saw_interrupt = true;
+                break;
+            }
+        }
+        assert!(saw_interrupt, "expected Esc to request Op::Interrupt");
+    }
+
+    #[test]
     fn prompt_slash_exit_cancels_without_interrupt_or_history() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;

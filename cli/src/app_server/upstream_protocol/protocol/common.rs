@@ -50,6 +50,13 @@ pub enum ClientRequest {
         request_id: RequestId,
         params: v2::TurnStartParams,
     },
+
+    #[serde(rename = "turn/interrupt")]
+    TurnInterrupt {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+        params: v2::TurnInterruptParams,
+    },
 }
 
 /// Notification from the client to the server.

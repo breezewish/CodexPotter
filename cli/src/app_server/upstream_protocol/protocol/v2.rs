@@ -205,10 +205,32 @@ pub struct TurnStartParams {
     pub collaboration_mode: Option<JsonValue>,
 }
 
+/// Upstream turn metadata returned by `turn/*` methods.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Turn {
+    pub id: String,
+}
+
 /// Response payload for `turn/start`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct TurnStartResponse {}
+pub struct TurnStartResponse {
+    pub turn: Turn,
+}
+
+/// Parameters for the `turn/interrupt` JSON-RPC method.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnInterruptParams {
+    pub thread_id: String,
+    pub turn_id: String,
+}
+
+/// Response payload for `turn/interrupt`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnInterruptResponse {}
 
 /// Byte range into the prompt string, used to map UI placeholders.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]

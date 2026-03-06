@@ -71,6 +71,10 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::mpsc::unbounded_channel;
 
+/// Upstream uses JSON-RPC's `INVALID_REQUEST_ERROR_CODE` when turn state preconditions fail
+/// (e.g. interrupting a turn that already completed).
+const JSONRPC_INVALID_REQUEST_ERROR_CODE: i64 = -32600;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RecoveryAction {
     RetryContinue { attempt: u32 },
@@ -80,6 +84,7 @@ struct StreamRecoveryContext {
     stream_recovery: PotterStreamRecovery,
     recovery_action_tx: UnboundedSender<RecoveryAction>,
     pending_continue_retry: Option<ContinueRetryPlan>,
+    active_turn_id: Option<String>,
     has_sent_turn_start: bool,
     has_finished_round: bool,
     last_turn_start_was_recovery_continue: bool,
@@ -226,6 +231,7 @@ async fn run_app_server_backend_inner(
         stream_recovery: PotterStreamRecovery::new(),
         recovery_action_tx,
         pending_continue_retry: None,
+        active_turn_id: None,
         has_sent_turn_start: false,
         has_finished_round: false,
         last_turn_start_was_recovery_continue: false,
@@ -652,14 +658,40 @@ async fn handle_op(
             send_message(stdin, &request).await?;
             let response =
                 read_until_response(stdin, lines, request_id, recovery, event_tx).await?;
-            let _parsed: TurnStartResponse =
+            let parsed: TurnStartResponse =
                 serde_json::from_value(response.result).context("decode turn/start response")?;
+            recovery.active_turn_id = Some(parsed.turn.id);
             Ok(())
         }
         Op::Interrupt => {
-            // The single-turn TUI runner does not track the active turn id, so we cannot call
-            // turn/interrupt. Ignore and let the session complete naturally.
-            Ok(())
+            let Some(turn_id) = recovery.active_turn_id.clone() else {
+                return Ok(());
+            };
+
+            let request_id = next_request_id(next_id);
+            let request = ClientRequest::TurnInterrupt {
+                request_id: request_id.clone(),
+                params: crate::app_server::upstream_protocol::TurnInterruptParams {
+                    thread_id: thread_id.to_string(),
+                    turn_id,
+                },
+            };
+            send_message(stdin, &request).await?;
+
+            match read_until_response_or_error(stdin, lines, &request_id, recovery, event_tx)
+                .await?
+            {
+                Ok(response) => {
+                    let _parsed: crate::app_server::upstream_protocol::TurnInterruptResponse =
+                        serde_json::from_value(response.result)
+                            .context("decode turn/interrupt response")?;
+                    Ok(())
+                }
+                Err(error) if error.code == JSONRPC_INVALID_REQUEST_ERROR_CODE => Ok(()),
+                Err(error) => {
+                    anyhow::bail!("app-server returned error for {request_id:?}: {error:?}");
+                }
+            }
         }
         Op::GetHistoryEntryRequest { .. } => {
             // The prompt screen does not support fetching persisted prompt history from the
@@ -726,6 +758,21 @@ fn handle_codex_event(
         && recovery.event_mode == AppServerEventMode::Interactive
     {
         return;
+    }
+
+    match &event.msg {
+        EventMsg::TurnStarted(ev) if !ev.turn_id.is_empty() => {
+            recovery.active_turn_id = Some(ev.turn_id.clone());
+        }
+        EventMsg::TurnComplete(_) => {
+            recovery.active_turn_id = None;
+        }
+        EventMsg::TurnAborted(ev)
+            if ev.reason != codex_protocol::protocol::TurnAbortReason::Replaced =>
+        {
+            recovery.active_turn_id = None;
+        }
+        _ => {}
     }
 
     let event_id = event.id.clone();
@@ -1123,6 +1170,7 @@ mod stream_recovery_tests {
             stream_recovery: PotterStreamRecovery::new(),
             recovery_action_tx: action_tx,
             pending_continue_retry: None,
+            active_turn_id: None,
             has_sent_turn_start: true,
             has_finished_round: false,
             last_turn_start_was_recovery_continue: false,
@@ -1216,6 +1264,7 @@ mod stream_recovery_tests {
             stream_recovery: PotterStreamRecovery::new(),
             recovery_action_tx: action_tx,
             pending_continue_retry: None,
+            active_turn_id: None,
             has_sent_turn_start: false,
             has_finished_round: false,
             last_turn_start_was_recovery_continue: false,
@@ -1252,6 +1301,7 @@ mod stream_recovery_tests {
             stream_recovery: PotterStreamRecovery::new(),
             recovery_action_tx: action_tx,
             pending_continue_retry: None,
+            active_turn_id: None,
             has_sent_turn_start: true,
             has_finished_round: false,
             last_turn_start_was_recovery_continue: false,
@@ -1313,6 +1363,7 @@ mod stream_recovery_tests {
             stream_recovery: PotterStreamRecovery::new(),
             recovery_action_tx: action_tx,
             pending_continue_retry: None,
+            active_turn_id: None,
             has_sent_turn_start: true,
             has_finished_round: false,
             last_turn_start_was_recovery_continue: false,
@@ -1356,6 +1407,7 @@ mod stream_recovery_tests {
             stream_recovery: PotterStreamRecovery::new(),
             recovery_action_tx: action_tx,
             pending_continue_retry: None,
+            active_turn_id: None,
             has_sent_turn_start: true,
             has_finished_round: false,
             last_turn_start_was_recovery_continue: false,
@@ -1390,6 +1442,7 @@ mod stream_recovery_tests {
             stream_recovery: PotterStreamRecovery::new(),
             recovery_action_tx: action_tx,
             pending_continue_retry: None,
+            active_turn_id: None,
             has_sent_turn_start: true,
             has_finished_round: false,
             last_turn_start_was_recovery_continue: false,
@@ -1428,6 +1481,7 @@ mod stream_recovery_tests {
             stream_recovery: PotterStreamRecovery::new(),
             recovery_action_tx: action_tx,
             pending_continue_retry: None,
+            active_turn_id: None,
             has_sent_turn_start: true,
             has_finished_round: false,
             last_turn_start_was_recovery_continue: false,
@@ -1553,7 +1607,7 @@ echo '{{"id":2,"result":{{"thread":{{"id":"00000000-0000-0000-0000-000000000000"
 
 # first turn/start request
 IFS= read -r _line
-echo '{{"id":3,"result":{{}}}}'
+echo '{{"id":3,"result":{{"turn":{{"id":"turn-1"}}}}}}'
 
 # signal completion for the first turn
 echo '{{"method":"codex/event/test","params":{{"id":"1","msg":{{"type":"turn_complete","last_agent_message":null}}}}}}'
@@ -1561,7 +1615,7 @@ echo '{{"method":"codex/event/test","params":{{"id":"1","msg":{{"type":"turn_com
 # second turn/start request (should still be accepted)
 IFS= read -r _line
 touch "$MARKER"
-echo '{{"id":4,"result":{{}}}}'
+echo '{{"id":4,"result":{{"turn":{{"id":"turn-2"}}}}}}'
 
 # Wait for the client to close stdin to request shutdown.
 while IFS= read -r _line; do
@@ -1661,6 +1715,157 @@ done
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn backend_turn_interrupt_requests_turn_interrupt() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let codex_bin = temp.path().join("dummy-codex");
+        let marker = temp.path().join("saw-turn-interrupt");
+
+        let script = format!(
+            r#"#!/usr/bin/env bash
+set -euo pipefail
+
+MARKER="{marker}"
+
+if [[ "${{1:-}}" != "app-server" ]]; then
+  echo "expected app-server, got: $*" >&2
+  exit 1
+fi
+
+# initialize request
+IFS= read -r _line
+echo '{{"id":1,"result":{{}}}}'
+
+# initialized notification
+IFS= read -r _line
+
+# thread/start request
+IFS= read -r _line
+echo '{{"id":2,"result":{{"thread":{{"id":"00000000-0000-0000-0000-000000000000","path":"rollout.jsonl"}},"model":"test-model","modelProvider":"test-provider","cwd":"project","approvalPolicy":"never","sandbox":{{"type":"readOnly"}},"reasoningEffort":null}}}}'
+
+# turn/start request
+IFS= read -r _line
+echo '{{"id":3,"result":{{"turn":{{"id":"turn-1"}}}}}}'
+
+# turn/interrupt request
+IFS= read -r interrupt
+echo "$interrupt" | grep -q '"method":"turn/interrupt"' || {{
+  echo "expected turn/interrupt, got: $interrupt" >&2
+  exit 1
+}}
+echo "$interrupt" | grep -q '"threadId":"00000000-0000-0000-0000-000000000000"' || {{
+  echo "expected threadId in turn/interrupt, got: $interrupt" >&2
+  exit 1
+}}
+echo "$interrupt" | grep -q '"turnId":"turn-1"' || {{
+  echo "expected turnId=turn-1 in turn/interrupt, got: $interrupt" >&2
+  exit 1
+}}
+touch "$MARKER"
+echo '{{"id":4,"result":{{}}}}'
+
+# signal interruption for the turn
+echo '{{"method":"codex/event/test","params":{{"id":"abort-1","msg":{{"type":"turn_aborted","turn_id":"turn-1","reason":"interrupted"}}}}}}'
+
+# Wait for the client to close stdin to request shutdown.
+while IFS= read -r _line; do
+  :
+done
+"#,
+            marker = marker.display(),
+        );
+
+        std::fs::write(&codex_bin, script).expect("write dummy codex");
+        let mut perms = std::fs::metadata(&codex_bin)
+            .expect("stat dummy codex")
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&codex_bin, perms).expect("chmod dummy codex");
+
+        let (event_tx, mut event_rx) = unbounded_channel::<Event>();
+        let (fatal_exit_tx, _fatal_exit_rx) = unbounded_channel::<String>();
+
+        let (op_tx, mut op_rx) = unbounded_channel::<Op>();
+        let backend = tokio::spawn(async move {
+            run_app_server_backend_inner(
+                AppServerBackendConfig {
+                    codex_bin: codex_bin.display().to_string(),
+                    developer_instructions: None,
+                    launch: AppServerLaunchConfig {
+                        spawn_sandbox: None,
+                        thread_sandbox: None,
+                        bypass_approvals_and_sandbox: false,
+                    },
+                    codex_home: None,
+                    thread_cwd: None,
+                    resume_thread_id: None,
+                    event_mode: AppServerEventMode::Interactive,
+                },
+                &mut op_rx,
+                &event_tx,
+                &fatal_exit_tx,
+            )
+            .await
+        });
+
+        op_tx
+            .send(Op::UserInput {
+                items: vec![UserInput::Text {
+                    text: "hello".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+            })
+            .expect("send user input");
+
+        op_tx.send(Op::Interrupt).expect("send interrupt");
+
+        timeout(Duration::from_secs(5), async {
+            while !marker.exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("timed out waiting for dummy server marker");
+
+        let saw_round_finished = timeout(Duration::from_secs(5), async {
+            while let Some(event) = event_rx.recv().await {
+                if matches!(
+                    event.msg,
+                    EventMsg::PotterRoundFinished {
+                        outcome: PotterRoundOutcome::Interrupted
+                    }
+                ) {
+                    return true;
+                }
+            }
+            false
+        })
+        .await;
+
+        assert_eq!(
+            saw_round_finished,
+            Ok(true),
+            "did not observe PotterRoundFinished(Interrupted)"
+        );
+
+        drop(op_tx);
+
+        timeout(Duration::from_secs(5), backend)
+            .await
+            .expect("backend timed out")
+            .expect("backend panicked")
+            .expect("backend failed");
+
+        assert!(
+            marker.exists(),
+            "dummy server did not observe turn/interrupt"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn backend_stream_recovery_rolls_back_last_continue_turn() {
         use std::os::unix::fs::PermissionsExt;
 
@@ -1692,7 +1897,7 @@ echo '{{"id":2,"result":{{"thread":{{"id":"00000000-0000-0000-0000-000000000000"
 
 # first turn/start request
 IFS= read -r _line
-echo '{{"id":3,"result":{{}}}}'
+echo '{{"id":3,"result":{{"turn":{{"id":"turn-1"}}}}}}'
 
 # signal a retryable stream error, followed by an empty completion
 echo '{{"method":"codex/event/test","params":{{"id":"err-1","msg":{{"type":"error","message":"stream disconnected before completion: error sending request for url (...)"}}}}}}'
@@ -1708,7 +1913,7 @@ echo "$turn_start" | grep -q '"text":"Continue"' || {{
   echo "expected Continue prompt, got: $turn_start" >&2
   exit 1
 }}
-echo '{{"id":4,"result":{{}}}}'
+echo '{{"id":4,"result":{{"turn":{{"id":"turn-2"}}}}}}'
 
 # signal another retryable stream error (attempt 2)
 echo '{{"method":"codex/event/test","params":{{"id":"err-2","msg":{{"type":"error","message":"stream disconnected before completion: error sending request for url (...)"}}}}}}'
@@ -1738,7 +1943,7 @@ echo "$turn_start" | grep -q '"text":"Continue"' || {{
   exit 1
 }}
 touch "$MARKER"
-echo '{{"id":6,"result":{{}}}}'
+echo '{{"id":6,"result":{{"turn":{{"id":"turn-3"}}}}}}'
 
 # Wait for the client to close stdin to request shutdown.
 while IFS= read -r _line; do
@@ -1846,7 +2051,7 @@ echo '{{"id":2,"result":{{"thread":{{"id":"00000000-0000-0000-0000-000000000000"
 
 # first turn/start request
 IFS= read -r _line
-echo '{{"id":3,"result":{{}}}}'
+echo '{{"id":3,"result":{{"turn":{{"id":"turn-1"}}}}}}'
 
 # signal a retryable stream error, followed by an empty completion
 echo '{{"method":"codex/event/test","params":{{"id":"err-1","msg":{{"type":"error","message":"stream disconnected before completion: error sending request for url (...)"}}}}}}'
@@ -1862,7 +2067,7 @@ echo "$turn_start" | grep -q '"text":"Continue"' || {{
   echo "expected Continue prompt, got: $turn_start" >&2
   exit 1
 }}
-echo '{{"id":4,"result":{{}}}}'
+echo '{{"id":4,"result":{{"turn":{{"id":"turn-2"}}}}}}'
 
 # signal another retryable stream error (attempt 2), which would normally schedule a rollback+Continue
 echo '{{"method":"codex/event/test","params":{{"id":"err-2","msg":{{"type":"error","message":"stream disconnected before completion: error sending request for url (...)"}}}}}}'
@@ -1882,7 +2087,7 @@ echo "$turn_start" | grep -q '"text":"manual"' || {{
   echo "expected manual prompt, got: $turn_start" >&2
   exit 1
 }}
-echo '{{"id":5,"result":{{}}}}'
+echo '{{"id":5,"result":{{"turn":{{"id":"turn-3"}}}}}}'
 
 # Ensure the pending retry action does not fire after the manual input.
 if IFS= read -r -t 2 unexpected; then

@@ -19,6 +19,8 @@ use codex_tui::InterruptedProjectAction;
 
 use crate::workflow::round_runner::UiFuture;
 
+const PROGRESS_FILE_CHANGED_TURN_PROMPT_OVERRIDE: &str = "Progress file has been changed by user";
+
 /// Runtime configuration for running one or more CodexPotter projects.
 #[derive(Debug, Clone)]
 pub struct ProjectQueueOptions {
@@ -310,9 +312,9 @@ where
                                     crate::app_server::potter::ProjectResolveInterruptParams {
                                         project_id: project_id.clone(),
                                         action: crate::app_server::potter::ResolveInterruptAction::Continue,
-                                        turn_prompt_override: Some(String::from(
-                                            "Progress file has been changed by user",
-                                        )),
+                                        turn_prompt_override: Some(
+                                            PROGRESS_FILE_CHANGED_TURN_PROMPT_OVERRIDE.to_string(),
+                                        ),
                                     },
                                 )
                                 .await
@@ -826,7 +828,7 @@ mod tests {
             crate::app_server::potter::ProjectResolveInterruptParams {
                 project_id: String::from("project_1"),
                 action: crate::app_server::potter::ResolveInterruptAction::Continue,
-                turn_prompt_override: Some(String::from("Progress file has been changed by user")),
+                turn_prompt_override: Some(PROGRESS_FILE_CHANGED_TURN_PROMPT_OVERRIDE.to_string(),),
             }
         );
     }

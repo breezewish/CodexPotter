@@ -27,6 +27,8 @@ use crate::bottom_pane::ListSelectionView;
 use crate::bottom_pane::SideContentWidth;
 use crate::bottom_pane::popup_content_width;
 use crate::bottom_pane::side_by_side_layout_widths;
+use crate::render::Insets;
+use crate::render::RectExt as _;
 use crate::render::renderable::Renderable;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
@@ -42,10 +44,9 @@ struct StartupVerbosityPromptView {
 }
 
 fn build_startup_prompt_view(
-    setup_step: Option<StartupSetupStep>,
     app_event_tx: crate::app_event_sender::AppEventSender,
 ) -> StartupVerbosityPromptView {
-    let mut params = crate::verbosity_picker::build_startup_verbosity_picker_params(setup_step);
+    let mut params = crate::verbosity_picker::build_startup_verbosity_picker_params();
     params.footer_note = None;
     params.footer_hint = None;
 
@@ -79,6 +80,7 @@ fn desired_height(
     view: &ListSelectionView,
     side_content_width: SideContentWidth,
     side_content_min_width: u16,
+    setup_step: Option<StartupSetupStep>,
 ) -> u16 {
     let width = width.max(1);
     let note_line = Line::from(vec![
@@ -110,7 +112,9 @@ fn desired_height(
 
     view.desired_height(width)
         .saturating_add(below_height)
-        .saturating_add(1)
+        .saturating_add(u16::from(
+            setup_step.filter(|step| step.should_render()).is_some(),
+        ))
 }
 
 fn render_startup_prompt(
@@ -120,18 +124,33 @@ fn render_startup_prompt(
     selected_for_preview: &Arc<Mutex<Verbosity>>,
     side_content_width: SideContentWidth,
     side_content_min_width: u16,
+    setup_step: Option<StartupSetupStep>,
 ) {
     ratatui::widgets::Clear.render(area, buf);
 
     let width = area.width.max(1);
-    if area.height <= 1 {
+    let setup_step = setup_step.filter(|step| step.should_render());
+    let top_padding = u16::from(setup_step.is_some());
+
+    if area.height == 0 {
+        return;
+    }
+
+    if let Some(step) = setup_step {
+        let label_area = Rect::new(area.x, area.y, area.width, 1).inset(Insets::tlbr(0, 2, 0, 0));
+        if !label_area.is_empty() {
+            Line::from(step.label()).dim().render(label_area, buf);
+        }
+    }
+
+    if area.height <= top_padding {
         return;
     }
     let view_area = Rect::new(
         area.x,
-        area.y.saturating_add(1),
+        area.y.saturating_add(top_padding),
         area.width,
-        area.height - 1,
+        area.height - top_padding,
     );
     if view_area.is_empty() {
         return;
@@ -241,14 +260,20 @@ pub async fn run_startup_verbosity_prompt_with_tui(
 ) -> anyhow::Result<Option<Verbosity>> {
     let (app_event_tx, _app_event_rx) = tokio::sync::mpsc::unbounded_channel();
     let app_event_tx = crate::app_event_sender::AppEventSender::new(app_event_tx);
-    let mut prompt_view = build_startup_prompt_view(setup_step, app_event_tx);
+    let mut prompt_view = build_startup_prompt_view(app_event_tx);
     let selected_for_preview = prompt_view.selected_for_preview.clone();
     let side_content_width = prompt_view.side_content_width;
     let side_content_min_width = prompt_view.side_content_min_width;
 
     let render_view = |tui: &mut Tui, view: &ListSelectionView| -> anyhow::Result<()> {
         let width = tui.terminal.last_known_screen_size.width.max(1);
-        let height = desired_height(width, view, side_content_width, side_content_min_width);
+        let height = desired_height(
+            width,
+            view,
+            side_content_width,
+            side_content_min_width,
+            setup_step,
+        );
         tui.draw(height, |frame| {
             render_startup_prompt(
                 frame.area(),
@@ -257,6 +282,7 @@ pub async fn run_startup_verbosity_prompt_with_tui(
                 &selected_for_preview,
                 side_content_width,
                 side_content_min_width,
+                setup_step,
             );
         })?;
         Ok(())
@@ -316,17 +342,18 @@ mod tests {
     #[test]
     fn startup_verbosity_prompt_initial_vt100() {
         let width: u16 = 100;
+        let setup_step = Some(StartupSetupStep::new(2, 2));
 
         let (app_event_tx, _app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
-        let prompt_view =
-            build_startup_prompt_view(Some(StartupSetupStep::new(2, 2)), app_event_tx);
+        let prompt_view = build_startup_prompt_view(app_event_tx);
 
         let height = desired_height(
             width,
             &prompt_view.view,
             prompt_view.side_content_width,
             prompt_view.side_content_min_width,
+            setup_step,
         );
         let backend = VT100Backend::new(width, height);
         let mut terminal = Terminal::new(backend).expect("create terminal");
@@ -340,6 +367,7 @@ mod tests {
                     &prompt_view.selected_for_preview,
                     prompt_view.side_content_width,
                     prompt_view.side_content_min_width,
+                    setup_step,
                 );
             })
             .expect("draw");
@@ -353,17 +381,18 @@ mod tests {
     #[test]
     fn startup_verbosity_prompt_narrow_vt100() {
         let width: u16 = 80;
+        let setup_step = Some(StartupSetupStep::new(2, 2));
 
         let (app_event_tx, _app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
-        let prompt_view =
-            build_startup_prompt_view(Some(StartupSetupStep::new(2, 2)), app_event_tx);
+        let prompt_view = build_startup_prompt_view(app_event_tx);
 
         let height = desired_height(
             width,
             &prompt_view.view,
             prompt_view.side_content_width,
             prompt_view.side_content_min_width,
+            setup_step,
         );
         let backend = VT100Backend::new(width, height);
         let mut terminal = Terminal::new(backend).expect("create terminal");
@@ -377,6 +406,7 @@ mod tests {
                     &prompt_view.selected_for_preview,
                     prompt_view.side_content_width,
                     prompt_view.side_content_min_width,
+                    setup_step,
                 );
             })
             .expect("draw");
@@ -390,17 +420,18 @@ mod tests {
     #[test]
     fn startup_verbosity_prompt_narrow_truncated_height_vt100() {
         let width: u16 = 80;
+        let setup_step = Some(StartupSetupStep::new(2, 2));
 
         let (app_event_tx, _app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
-        let prompt_view =
-            build_startup_prompt_view(Some(StartupSetupStep::new(2, 2)), app_event_tx);
+        let prompt_view = build_startup_prompt_view(app_event_tx);
 
         let full_height = desired_height(
             width,
             &prompt_view.view,
             prompt_view.side_content_width,
             prompt_view.side_content_min_width,
+            setup_step,
         );
         let height: u16 = 12;
         assert!(
@@ -420,6 +451,7 @@ mod tests {
                     &prompt_view.selected_for_preview,
                     prompt_view.side_content_width,
                     prompt_view.side_content_min_width,
+                    setup_step,
                 );
             })
             .expect("draw");

@@ -3,6 +3,7 @@ source: tui/src/global_gitignore_prompt.rs
 expression: terminal.backend().vt100().screen().contents()
 ---
   Setup 1/2                                                                     
+
   Add .codexpotter/ to your global gitignore file ~/.config/git/ignore?
 
   This keeps your CodexPotter projects private and prevents accidental commits. 

@@ -17,7 +17,6 @@ use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
-use crate::StartupSetupStep;
 use crate::app_event::AppEvent;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
@@ -26,7 +25,6 @@ use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::exec_cell::CommandOutput;
 use crate::exec_cell::ExecCell;
 use crate::history_cell;
-use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
 use crate::verbosity::Verbosity;
 
@@ -212,17 +210,6 @@ impl Renderable for VerbosityPreviewWideRenderable {
     }
 }
 
-fn startup_picker_header(setup_step: Option<StartupSetupStep>) -> Box<dyn Renderable> {
-    let Some(step) = setup_step.filter(|step| step.should_render()) else {
-        return Box::new(());
-    };
-
-    let mut column = ColumnRenderable::new();
-    column.push(Line::from(step.label()).dim());
-    column.push("");
-    Box::new(column)
-}
-
 fn build_verbosity_picker_params_impl(
     current: Option<Verbosity>,
     initial: Verbosity,
@@ -310,13 +297,11 @@ pub fn build_verbosity_picker_params(current: Verbosity) -> SelectionViewParams 
 /// Builds [`SelectionViewParams`] for the startup verbosity onboarding prompt.
 ///
 /// This prompt is a codex-potter-specific divergence from upstream Codex TUI.
-pub fn build_startup_verbosity_picker_params(
-    setup_step: Option<StartupSetupStep>,
-) -> SelectionViewParams {
+pub fn build_startup_verbosity_picker_params() -> SelectionViewParams {
     build_verbosity_picker_params_impl(
         None,
         Verbosity::Minimal,
-        startup_picker_header(setup_step),
+        Box::new(()),
         Some(Line::from("You can change this later via /verbosity.").dim()),
         false,
     )

@@ -2,15 +2,15 @@
 source: tui/src/verbosity_prompt.rs
 expression: terminal.backend().vt100().screen().contents()
 ---
+  Setup 2/2                                                                                         
 
+  Select Verbosity                                   • I'll first align the rendering pipeline.
+  Choose how much detail to show
+                                                     • Changed 2 files (+3 -1)
+› 1. Minimal (default)  Show results only              └ Edited protocol/src/models.rs (+2 -1)
+  2. Simple             Show key progress updates        Edited protocol/src/protocol.rs (+1 -0)
 
-  Setup 2/2                                          • I'll first align the rendering pipeline.
-
-  Select Verbosity                                   • Changed 2 files (+3 -1)
-  Choose how much detail to show                       └ Edited protocol/src/models.rs (+2 -1)
-                                                         Edited protocol/src/protocol.rs (+1 -0)
-› 1. Minimal (default)  Show results only
-  2. Simple             Show key progress updates    • Final answer text stays fully visible.
+                                                     • Final answer text stays fully visible.
 
 
 

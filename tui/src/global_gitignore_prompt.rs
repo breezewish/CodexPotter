@@ -222,6 +222,7 @@ impl WidgetRef for &GlobalGitignorePromptScreen {
                     .dim()
                     .inset(Insets::tlbr(0, 2, 0, 0)),
             );
+            column.push("");
         } else {
             column.push("");
         }

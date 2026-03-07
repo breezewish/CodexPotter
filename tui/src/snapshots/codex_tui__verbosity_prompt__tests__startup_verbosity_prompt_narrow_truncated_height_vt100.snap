@@ -2,9 +2,7 @@
 source: tui/src/verbosity_prompt.rs
 expression: terminal.backend().vt100().screen().contents()
 ---
-
-
-  Setup 2/2                                                                   
+  Setup 2/2                                                                     
 
   Select Verbosity
   Choose how much detail to show
@@ -13,4 +11,6 @@ expression: terminal.backend().vt100().screen().contents()
   2. Simple             Show key progress updates
 
   Press enter to confirm or esc to skip                                         
-  You can change this later via /verbosity.
+  You can change this later via /verbosity.                                     
+
+  Preview

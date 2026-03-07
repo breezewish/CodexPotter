@@ -2,9 +2,7 @@
 source: tui/src/verbosity_prompt.rs
 expression: terminal.backend().vt100().screen().contents()
 ---
-
-
-  Setup 2/2                                                                   
+  Setup 2/2                                                                     
 
   Select Verbosity
   Choose how much detail to show

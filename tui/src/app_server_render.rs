@@ -907,11 +907,15 @@ impl AppServerEventProcessor {
         if self.verbosity == Verbosity::Minimal {
             // In `Verbosity::Minimal` we render patch applications as compact `Edited ...` items
             // and coalesce adjacent patch applications. Many event types are suppressed entirely
-            // in this verbosity level, but patch-apply begin markers are the main one that should
-            // not break coalescing.
+            // in this verbosity level (e.g. token count updates and `Ran` tool calls), so they
+            // should not break coalescing.
             match msg {
                 EventMsg::PatchApplyBegin(_) => return,
                 EventMsg::PatchApplyEnd(ev) if ev.success => return,
+                EventMsg::ExecCommandBegin(_)
+                | EventMsg::ExecCommandEnd(_)
+                | EventMsg::SessionConfigured(_)
+                | EventMsg::TokenCount(_) => return,
                 _ => {}
             }
         }
@@ -3841,15 +3845,9 @@ mod tests {
             }),
         });
 
-        // In `Verbosity::Minimal` patch events may be coalesced, so flush the pending compact cell
-        // by delivering a non-patch event.
-        proc.handle_codex_event(Event {
-            id: "token-count".into(),
-            msg: EventMsg::TokenCount(TokenCountEvent {
-                info: None,
-                rate_limits: None,
-            }),
-        });
+        // In `Verbosity::Minimal` successful patch applications are buffered and rendered as a
+        // coalesced compact summary. Flush explicitly so the snapshot includes the patch cell.
+        proc.flush_pending_compact_patch_changes();
         drain_render_history_events(
             &mut rx,
             &mut terminal,
@@ -4824,6 +4822,124 @@ mod tests {
                 }),
             });
         }
+
+        proc.handle_codex_event(Event {
+            id: "agent-message".into(),
+            msg: EventMsg::AgentMessage(AgentMessageEvent {
+                message: "ok".into(),
+                phase: None,
+            }),
+        });
+
+        let events = drain_history_cell_strings(&mut rx, width);
+        let [patch, separator, agent_message] = events.as_slice() else {
+            panic!("expected patch, separator, then agent message");
+        };
+        pretty_assertions::assert_eq!(patch, &vec!["• Edited file.txt (+2 -2)".to_string()]);
+        assert!(
+            separator
+                .first()
+                .is_some_and(|line| line.chars().all(|ch| ch == '─')),
+            "expected a final message separator"
+        );
+        pretty_assertions::assert_eq!(agent_message, &vec!["• ok".to_string()]);
+    }
+
+    #[test]
+    fn round_renderer_minimal_coalesces_patch_cells_across_suppressed_events() {
+        let width: u16 = 80;
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let app_event_tx = AppEventSender::new(tx_raw);
+
+        let mut proc = AppServerEventProcessor::new(app_event_tx, Verbosity::default());
+
+        let mut changes_1: HashMap<PathBuf, codex_protocol::protocol::FileChange> = HashMap::new();
+        changes_1.insert(
+            PathBuf::from("file.txt"),
+            codex_protocol::protocol::FileChange::Update {
+                unified_diff: diffy::create_patch("a\n", "b\n").to_string(),
+                move_path: None,
+            },
+        );
+
+        proc.handle_codex_event(Event {
+            id: "patch-1-begin".into(),
+            msg: EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
+                call_id: "patch-1".into(),
+                turn_id: "turn-1".into(),
+                auto_approved: true,
+                changes: changes_1.clone(),
+            }),
+        });
+        proc.handle_codex_event(Event {
+            id: "patch-1-end".into(),
+            msg: EventMsg::PatchApplyEnd(PatchApplyEndEvent {
+                call_id: "patch-1".into(),
+                turn_id: "turn-1".into(),
+                stdout: String::new(),
+                stderr: String::new(),
+                success: true,
+                changes: changes_1,
+            }),
+        });
+
+        proc.handle_codex_event(Event {
+            id: "token-count".into(),
+            msg: EventMsg::TokenCount(TokenCountEvent {
+                info: None,
+                rate_limits: None,
+            }),
+        });
+
+        proc.handle_codex_event(Event {
+            id: "ran-failed".into(),
+            msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+                call_id: "ran-failed".into(),
+                process_id: None,
+                turn_id: "turn-1".into(),
+                command: vec!["bash".into(), "-lc".into(), "false".into()],
+                cwd: PathBuf::from("project"),
+                parsed_cmd: Vec::new(),
+                source: ExecCommandSource::Agent,
+                interaction_input: None,
+                stdout: String::new(),
+                stderr: "nope".into(),
+                aggregated_output: String::new(),
+                exit_code: 1,
+                duration: std::time::Duration::from_millis(1),
+                formatted_output: String::new(),
+            }),
+        });
+
+        let mut changes_2: HashMap<PathBuf, codex_protocol::protocol::FileChange> = HashMap::new();
+        changes_2.insert(
+            PathBuf::from("file.txt"),
+            codex_protocol::protocol::FileChange::Update {
+                unified_diff: diffy::create_patch("b\n", "c\n").to_string(),
+                move_path: None,
+            },
+        );
+
+        proc.handle_codex_event(Event {
+            id: "patch-2-begin".into(),
+            msg: EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
+                call_id: "patch-2".into(),
+                turn_id: "turn-1".into(),
+                auto_approved: true,
+                changes: changes_2.clone(),
+            }),
+        });
+        proc.handle_codex_event(Event {
+            id: "patch-2-end".into(),
+            msg: EventMsg::PatchApplyEnd(PatchApplyEndEvent {
+                call_id: "patch-2".into(),
+                turn_id: "turn-1".into(),
+                stdout: String::new(),
+                stderr: String::new(),
+                success: true,
+                changes: changes_2,
+            }),
+        });
 
         proc.handle_codex_event(Event {
             id: "agent-message".into(),

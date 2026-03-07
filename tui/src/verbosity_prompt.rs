@@ -140,4 +140,40 @@ mod tests {
             terminal.backend().vt100().screen().contents()
         );
     }
+
+    #[test]
+    fn startup_verbosity_prompt_narrow_vt100() {
+        let width: u16 = 80;
+
+        let params = crate::verbosity_picker::build_startup_verbosity_picker_params(Some(
+            StartupSetupStep::new(2, 2),
+        ));
+
+        let (app_event_tx, _app_event_rx) = unbounded_channel();
+        let app_event_tx = AppEventSender::new(app_event_tx);
+        let view = ListSelectionView::new(params, app_event_tx);
+
+        let height = view.desired_height(width).saturating_add(1);
+        let backend = VT100Backend::new(width, height);
+        let mut terminal = Terminal::new(backend).expect("create terminal");
+
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                ratatui::widgets::Clear.render(area, frame.buffer_mut());
+                let view_area = ratatui::layout::Rect::new(
+                    area.x,
+                    area.y.saturating_add(1),
+                    area.width,
+                    area.height.saturating_sub(1),
+                );
+                view.render(view_area, frame.buffer_mut());
+            })
+            .expect("draw");
+
+        assert_snapshot!(
+            "startup_verbosity_prompt_narrow_vt100",
+            terminal.backend().vt100().screen().contents()
+        );
+    }
 }

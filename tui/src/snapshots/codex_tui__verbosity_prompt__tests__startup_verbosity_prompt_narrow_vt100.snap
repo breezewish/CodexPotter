@@ -1,0 +1,34 @@
+---
+source: tui/src/verbosity_prompt.rs
+expression: terminal.backend().vt100().screen().contents()
+---
+
+
+  Setup 2/2                                                                   
+
+  Select Verbosity
+  Choose how interim transcript items are shown
+
+› 1. Minimal (default)  Dim commentary and hide tool chatter
+  2. Simple             Show interim items normally
+
+  Preview
+  • I'll first align the rollout and rendering pipeline, then implement /
+    verbosity.
+
+  • Edited 2 files (+3 -1)
+    └ protocol/src/models.rs (+2 -1)
+      protocol/src/protocol.rs (+1 -0)
+
+  • Final answer text stays fully visible.
+
+
+
+
+
+
+
+
+
+  You can change this later via /verbosity.                                     
+  Press enter to confirm or esc to go back

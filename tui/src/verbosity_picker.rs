@@ -26,7 +26,6 @@ use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::exec_cell::CommandOutput;
 use crate::exec_cell::ExecCell;
 use crate::history_cell;
-use crate::history_cell::HistoryCell as _;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
 use crate::verbosity::Verbosity;
@@ -37,20 +36,17 @@ const WIDE_PREVIEW_MIN_WIDTH: u16 = 40;
 /// Left inset used for wide preview content.
 const WIDE_PREVIEW_LEFT_INSET: u16 = 2;
 
-/// Narrow stacked preview uses a fixed compact layout.
-const NARROW_PREVIEW_HEIGHT: u16 = 4;
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum PreviewDensity {
-    Full,
-    Compact,
+enum StackedPreviewMode {
+    Hidden,
+    FullWithLabel,
 }
 
 struct VerbosityPreviewWideRenderable {
     selected: Arc<Mutex<Verbosity>>,
 }
 
-struct VerbosityPreviewNarrowRenderable {
+struct VerbosityPreviewStackedFullRenderable {
     selected: Arc<Mutex<Verbosity>>,
 }
 
@@ -163,17 +159,6 @@ fn append_preview_cell(
     out.append(&mut lines);
 }
 
-fn build_preview_lines(
-    verbosity: Verbosity,
-    density: PreviewDensity,
-    width: u16,
-) -> Vec<Line<'static>> {
-    match density {
-        PreviewDensity::Full => build_full_preview_lines(verbosity, width),
-        PreviewDensity::Compact => build_compact_preview_lines(verbosity, width),
-    }
-}
-
 fn build_full_preview_lines(verbosity: Verbosity, width: u16) -> Vec<Line<'static>> {
     let width = width.max(1);
     let mut out: Vec<Line<'static>> = Vec::new();
@@ -197,49 +182,13 @@ fn build_full_preview_lines(verbosity: Verbosity, width: u16) -> Vec<Line<'stati
     out
 }
 
-fn build_compact_preview_lines(verbosity: Verbosity, width: u16) -> Vec<Line<'static>> {
-    let width = width.max(1);
-    let changes = preview_patch_changes();
-    let cwd = Path::new(".");
-    let patch_compact = history_cell::new_patch_event(changes, cwd, Verbosity::Minimal);
-    let patch_lines = patch_compact.display_lines(width);
-
-    match verbosity {
-        Verbosity::Minimal => {
-            let header = Line::from("commentary is dimmed".dim().italic());
-            let line1 = patch_lines.first().cloned().unwrap_or_else(|| "".into());
-            let line2 = patch_lines.get(1).cloned().unwrap_or_else(|| "".into());
-            let line3 = patch_lines.get(2).cloned().unwrap_or_else(|| "".into());
-            vec![header, line1, line2, line3]
-        }
-        Verbosity::Simple => {
-            let header = Line::from("commentary is normal".dim().italic());
-            let ran = preview_ran_cell();
-            let ran_line = ran
-                .display_lines(width)
-                .into_iter()
-                .next()
-                .unwrap_or_else(|| "".into());
-            let line1 = patch_lines.first().cloned().unwrap_or_else(|| "".into());
-            let line2 = patch_lines.get(1).cloned().unwrap_or_else(|| "".into());
-            vec![header, ran_line, line1, line2]
-        }
-    }
-}
-
-fn preview_required_height(width: u16, density: PreviewDensity) -> u16 {
-    let minimal = build_preview_lines(Verbosity::Minimal, density, width);
-    let simple = build_preview_lines(Verbosity::Simple, density, width);
+fn preview_required_height(width: u16) -> u16 {
+    let minimal = build_full_preview_lines(Verbosity::Minimal, width);
+    let simple = build_full_preview_lines(Verbosity::Simple, width);
     u16::try_from(minimal.len().max(simple.len())).unwrap_or(u16::MAX)
 }
 
-fn render_preview(
-    area: Rect,
-    buf: &mut Buffer,
-    verbosity: Verbosity,
-    density: PreviewDensity,
-    left_inset: u16,
-) {
+fn render_preview(area: Rect, buf: &mut Buffer, verbosity: Verbosity, left_inset: u16) {
     if area.is_empty() {
         return;
     }
@@ -252,7 +201,7 @@ fn render_preview(
         area.height,
     );
 
-    let lines = build_preview_lines(verbosity, density, render_area.width);
+    let lines = build_full_preview_lines(verbosity, render_area.width);
     if lines.is_empty() {
         return;
     }
@@ -263,7 +212,7 @@ fn render_preview(
 impl Renderable for VerbosityPreviewWideRenderable {
     fn desired_height(&self, width: u16) -> u16 {
         let effective_width = width.saturating_sub(WIDE_PREVIEW_LEFT_INSET).max(1);
-        preview_required_height(effective_width, PreviewDensity::Full)
+        preview_required_height(effective_width)
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
@@ -271,27 +220,40 @@ impl Renderable for VerbosityPreviewWideRenderable {
             Ok(guard) => *guard,
             Err(poisoned) => *poisoned.into_inner(),
         };
-        render_preview(
-            area,
-            buf,
-            verbosity,
-            PreviewDensity::Full,
-            WIDE_PREVIEW_LEFT_INSET,
-        );
+        render_preview(area, buf, verbosity, WIDE_PREVIEW_LEFT_INSET);
     }
 }
 
-impl Renderable for VerbosityPreviewNarrowRenderable {
-    fn desired_height(&self, _width: u16) -> u16 {
-        NARROW_PREVIEW_HEIGHT
+impl Renderable for VerbosityPreviewStackedFullRenderable {
+    fn desired_height(&self, width: u16) -> u16 {
+        if width == 0 {
+            return 0;
+        }
+        preview_required_height(width).saturating_add(1)
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
+        if area.is_empty() {
+            return;
+        }
+
+        let label_area = Rect::new(area.x, area.y, area.width, 1.min(area.height));
+        Line::from("Preview".dim().italic()).render(label_area, buf);
+        if area.height <= 1 {
+            return;
+        }
+
+        let preview_area = Rect::new(
+            area.x,
+            area.y.saturating_add(1),
+            area.width,
+            area.height - 1,
+        );
         let verbosity = match self.selected.lock() {
             Ok(guard) => *guard,
             Err(poisoned) => *poisoned.into_inner(),
         };
-        render_preview(area, buf, verbosity, PreviewDensity::Compact, 0);
+        render_preview(preview_area, buf, verbosity, 0);
     }
 }
 
@@ -312,6 +274,7 @@ fn build_verbosity_picker_params_impl(
     header: Box<dyn Renderable>,
     footer_note: Option<Line<'static>>,
     include_actions: bool,
+    stacked_preview_mode: StackedPreviewMode,
 ) -> SelectionViewParams {
     let selected_mode = Arc::new(Mutex::new(initial));
     let selected_for_preview = selected_mode.clone();
@@ -378,9 +341,12 @@ fn build_verbosity_picker_params_impl(
         side_content_width: SideContentWidth::Half,
         side_content_min_width: WIDE_PREVIEW_MIN_WIDTH,
         fit_popup_height_to_side_content: true,
-        stacked_side_content: Some(Box::new(VerbosityPreviewNarrowRenderable {
-            selected: selected_mode,
-        })),
+        stacked_side_content: Some(match stacked_preview_mode {
+            StackedPreviewMode::Hidden => Box::new(()),
+            StackedPreviewMode::FullWithLabel => Box::new(VerbosityPreviewStackedFullRenderable {
+                selected: selected_mode,
+            }),
+        }),
         preserve_side_content_bg: true,
         on_selection_changed,
         ..Default::default()
@@ -389,7 +355,14 @@ fn build_verbosity_picker_params_impl(
 
 /// Builds [`SelectionViewParams`] for the `/verbosity` picker dialog.
 pub fn build_verbosity_picker_params(current: Verbosity) -> SelectionViewParams {
-    build_verbosity_picker_params_impl(Some(current), current, Box::new(()), None, true)
+    build_verbosity_picker_params_impl(
+        Some(current),
+        current,
+        Box::new(()),
+        None,
+        true,
+        StackedPreviewMode::Hidden,
+    )
 }
 
 /// Builds [`SelectionViewParams`] for the startup verbosity onboarding prompt.
@@ -404,6 +377,7 @@ pub fn build_startup_verbosity_picker_params(
         startup_picker_header(setup_step),
         Some(Line::from("You can change this later via /verbosity.").dim()),
         false,
+        StackedPreviewMode::FullWithLabel,
     )
 }
 
@@ -446,13 +420,20 @@ mod tests {
     }
 
     #[test]
-    fn verbosity_picker_uses_half_width_with_stacked_fallback_preview() {
+    fn verbosity_picker_hides_stacked_preview_when_narrow() {
         let params = build_verbosity_picker_params(Verbosity::default());
         assert_eq!(params.side_content_width, SideContentWidth::Half);
         assert_eq!(params.side_content_min_width, WIDE_PREVIEW_MIN_WIDTH);
         assert!(params.fit_popup_height_to_side_content);
         assert!(params.stacked_side_content.is_some());
         assert!(params.preserve_side_content_bg);
+
+        let stacked_height = params
+            .stacked_side_content
+            .as_deref()
+            .expect("stacked side content")
+            .desired_height(80);
+        assert_eq!(stacked_height, 0);
     }
 
     #[test]
@@ -466,25 +447,13 @@ mod tests {
     }
 
     #[test]
-    fn verbosity_picker_narrow_preview_snapshot_simple() {
-        let selected = Arc::new(Mutex::new(Verbosity::Simple));
-        let renderable = VerbosityPreviewNarrowRenderable { selected };
-        let width: u16 = 72;
-        let height = renderable.desired_height(width);
-        let lines = render_lines(&renderable, width, height).join("\n");
-        assert_snapshot!("verbosity_picker_narrow_preview_simple", lines);
-    }
-
-    #[test]
     fn wide_preview_height_matches_the_tallest_mode_for_the_width() {
         let selected = Arc::new(Mutex::new(Verbosity::Minimal));
         let renderable = VerbosityPreviewWideRenderable { selected };
         let width: u16 = 72;
 
-        let expected = preview_required_height(
-            width.saturating_sub(WIDE_PREVIEW_LEFT_INSET).max(1),
-            PreviewDensity::Full,
-        );
+        let expected =
+            preview_required_height(width.saturating_sub(WIDE_PREVIEW_LEFT_INSET).max(1));
         assert_eq!(renderable.desired_height(width), expected);
     }
 

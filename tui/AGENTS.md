@@ -20,13 +20,13 @@ Divergences must be documented in places below to avoid regression when syncing 
 
 ### Text Box
 
+- Supports `$` skills picker, the same as upstream.
 - Slash command picker exists but only supports `/theme`, `/verbosity`, `/exit`, `/mention`.
 - No `?` shortcuts overlay (treat `?` as a literal character).
 - `Tab` inserts a literal tab character (`\t`) into the composer.
 - `Cmd+↑` / `Cmd+↓` jumps cursor to the beginning/end of the entire buffer.
-- Supports `$` skills picker.
 - Composer placeholder text is customized.
-- No Esc-driven rewind/backtrack UX; `Esc` interrupts running tasks and otherwise dismisses popups.
+- No Esc-driven rewind/backtrack UX; `Esc` interrupts running project and otherwise dismisses popups.
 - No steer mode (always queue).
 - No image pasting support.
 - Bottom pane prompt footer shows working dir + optional git branch, plus the ctrl+g editor hint.
@@ -35,12 +35,16 @@ Divergences must be documented in places below to avoid regression when syncing 
 
 ### Message Items
 
-- Reasoning messages are never rendered.
-- Successful `Ran` items suppress output preview and adjacent ones are collapsed into one.
-- `Explored` items are more aggressively collapsed to avoid duplicates.
-- `/verbosity` controls interim transcript detail:
-  - `Minimal` dims `commentary` agent messages, hides all `Ran` and `Explored` items, coalesces consecutive `Edited` items, and renders `Edited` items as a file list only.
-  - `Simple` keeps the existing interim transcript output.
+- /verbosity provides finer-grained control over what content is printed:
+  Simple mode:
+  - Reasoning messages are never rendered.
+  - Successful `Ran` items suppress output preview and adjacent ones are collapsed into one.
+  - `Explored` items are more aggressively collapsed.
+    Minimal mode:
+  - With all the above Simple-mode suppressions, plus:
+  - `commentary` agent messages are dimmed
+  - All `Ran` and `Explored` items are hidden
+  - Consecutive Change (Edited, Created, Deleted) items are coalesced into one, and provide file list only, no diff body.
 - Additional codex-potter items (e.g. project creation hints, stream recovery retries, project-finished summary on success).
 
 ### Shimmer
@@ -61,11 +65,11 @@ Behavior related
   - If no `[tui].verbosity` is configured yet, prompt for a default verbosity level.
   - When both prompts are shown, they render `Setup 1/2` and `Setup 2/2` markers.
 - Multi-agent collab is transcript-only: no agent thread picker UI (no per-agent transcript view).
-- Resume picker UI exists for `codex-potter resume` (no path); it uses a `User Request` column (CodexPotter projects) instead of upstream `Conversation`.
+- Resume picker UI uses a `User Request` column for picking CodexPotter projects instead of upstream `Conversation`.
 - Auto retry on errors (successful recoveries are transient-only; unrecoverable errors are surfaced).
 - Customized update notification / self-update (and on-disk state under `~/.codexpotter/`).
 - No desktop notifications when the terminal is unfocused.
-- Interrupted-project action picker swallows `Esc` to avoid accidental stop-iterating from repeated Esc; use explicit selection (Enter/number) or `Ctrl+C`.
+- Esc triggers project interrupt with an action selection UI instead of turn interrupt.
 
 Engineering related:
 

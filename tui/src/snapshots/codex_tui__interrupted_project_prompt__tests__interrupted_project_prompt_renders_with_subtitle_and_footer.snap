@@ -11,4 +11,4 @@ expression: terminal.backend()
 "  2. I made some changes, continue iterate                      "
 "                                                                "
 "  Want to change the goal? Just edit this project file.         "
-"  Press enter to confirm or esc to stop iterating               "
+"  Press enter to confirm, Ctrl+C to stop iterating.             "

@@ -65,6 +65,7 @@ Behavior related
 - Auto retry on errors (successful recoveries are transient-only; unrecoverable errors are surfaced).
 - Customized update notification / self-update (and on-disk state under `~/.codexpotter/`).
 - No desktop notifications when the terminal is unfocused.
+- Interrupted-project action picker swallows `Esc` to avoid accidental stop-iterating from repeated Esc; use explicit selection (Enter/number) or `Ctrl+C`.
 
 Engineering related:
 

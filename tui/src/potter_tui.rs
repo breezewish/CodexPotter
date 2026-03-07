@@ -232,7 +232,7 @@ impl CodexPotterTui {
 
     /// Prompt the user for how to resolve an interrupted CodexPotter project.
     ///
-    /// Returns `None` when the prompt is cancelled (Esc/Ctrl+C).
+    /// Returns `None` when the prompt is cancelled (Ctrl+C).
     pub async fn prompt_interrupted_project_action(
         &mut self,
         progress_file_rel: PathBuf,

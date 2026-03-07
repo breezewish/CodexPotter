@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
 use ratatui::prelude::Widget;
@@ -18,6 +19,31 @@ use crate::tui::TuiEvent;
 pub enum InterruptedProjectAction {
     StopIterate,
     ContinueIterate,
+}
+
+fn handle_prompt_key_event(view: &mut ListSelectionView, key_event: KeyEvent) {
+    if key_event.kind == KeyEventKind::Release {
+        return;
+    }
+
+    // This prompt is entered by pressing Esc to interrupt a running task. Users frequently press
+    // Esc multiple times (or hold it briefly), which can accidentally dismiss the picker and end
+    // the project immediately. Swallow Esc here so only an explicit selection (Enter/number) or
+    // Ctrl+C stops the iteration.
+    if key_event.modifiers == KeyModifiers::NONE && matches!(key_event.code, KeyCode::Esc) {
+        return;
+    }
+
+    if key_event.modifiers.contains(KeyModifiers::CONTROL)
+        && matches!(key_event.code, KeyCode::Char('c'))
+    {
+        if key_event.kind == KeyEventKind::Press {
+            view.cancel();
+        }
+        return;
+    }
+
+    view.handle_key_event(key_event);
 }
 
 pub async fn prompt_interrupted_project_action(
@@ -47,7 +73,7 @@ pub async fn prompt_interrupted_project_action(
                 "Want to change the goal? Just edit this project file.",
             )),
             footer_hint: Some(Line::from(
-                "Press enter to confirm or esc to stop iterating",
+                "Press enter to confirm, Ctrl+C to stop iterating.",
             )),
             items,
             ..Default::default()
@@ -77,18 +103,7 @@ pub async fn prompt_interrupted_project_action(
         };
         match event {
             TuiEvent::Key(key_event) => {
-                if key_event.kind == KeyEventKind::Release {
-                    continue;
-                }
-                if key_event.modifiers.contains(KeyModifiers::CONTROL)
-                    && matches!(key_event.code, KeyCode::Char('c'))
-                {
-                    if key_event.kind == KeyEventKind::Press {
-                        view.cancel();
-                    }
-                } else {
-                    view.handle_key_event(key_event);
-                }
+                handle_prompt_key_event(&mut view, key_event);
                 tui.frame_requester().schedule_frame();
             }
             TuiEvent::Paste(_) => {}
@@ -131,6 +146,47 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     #[test]
+    fn interrupted_project_prompt_esc_does_not_cancel() {
+        let view = ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Current project is interrupted".to_string()),
+                items: vec![
+                    SelectionItem {
+                        name: "Stop iterate this project".to_string(),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "I made some changes, continue iterate".to_string(),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            crate::app_event_sender::AppEventSender::new(tokio::sync::mpsc::unbounded_channel().0),
+        );
+
+        let mut view = view;
+        assert!(!view.is_complete(), "expected prompt to start incomplete");
+
+        handle_prompt_key_event(&mut view, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(
+            !view.is_complete(),
+            "expected Esc not to cancel the interrupted-project prompt"
+        );
+
+        handle_prompt_key_event(
+            &mut view,
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+        );
+        assert!(
+            view.is_complete(),
+            "expected Ctrl+C to cancel the interrupted-project prompt"
+        );
+    }
+
+    #[test]
     fn interrupted_project_prompt_renders_with_subtitle_and_footer() {
         let progress_file_rel = PathBuf::from(".codexpotter/projects/2026/03/06/4/MAIN.md");
 
@@ -155,7 +211,7 @@ mod tests {
                     "Want to change the goal? Just edit this project file.",
                 )),
                 footer_hint: Some(Line::from(
-                    "Press enter to confirm or esc to stop iterating",
+                    "Press enter to confirm, Ctrl+C to stop iterating.",
                 )),
                 items,
                 ..Default::default()

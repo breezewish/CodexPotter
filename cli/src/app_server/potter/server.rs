@@ -837,13 +837,15 @@ fn load_potter_rollout_lines(
 }
 
 fn count_completed_rounds(lines: &[crate::workflow::rollout::PotterRolloutLine]) -> usize {
+    // `Op::Interrupt` intentionally does not consume round budget: we may retry the interrupted
+    // round (same round index / round_current) without advancing.
     lines
         .iter()
-        .filter(|line| {
-            matches!(
-                line,
-                crate::workflow::rollout::PotterRolloutLine::RoundFinished { .. }
-            )
+        .filter(|line| match line {
+            crate::workflow::rollout::PotterRolloutLine::RoundFinished { outcome } => {
+                !matches!(outcome, PotterRoundOutcome::Interrupted)
+            }
+            _ => false,
         })
         .count()
 }
@@ -1865,6 +1867,28 @@ mod tests {
                 .expect("decode")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn count_completed_rounds_ignores_interrupted_outcome() {
+        let lines = vec![
+            crate::workflow::rollout::PotterRolloutLine::RoundFinished {
+                outcome: PotterRoundOutcome::Interrupted,
+            },
+            crate::workflow::rollout::PotterRolloutLine::RoundFinished {
+                outcome: PotterRoundOutcome::Completed,
+            },
+            crate::workflow::rollout::PotterRolloutLine::RoundFinished {
+                outcome: PotterRoundOutcome::TaskFailed {
+                    message: String::from("nope"),
+                },
+            },
+            crate::workflow::rollout::PotterRolloutLine::RoundFinished {
+                outcome: PotterRoundOutcome::UserRequested,
+            },
+        ];
+
+        assert_eq!(count_completed_rounds(&lines), 3);
     }
 
     #[tokio::test]

@@ -11,9 +11,9 @@ expression: terminal.backend().vt100().screen().contents()
 
 
 
+
+
 › test prompt
 
 
 ─ Worked for 0s ────────────────────────────────────────────────────────────────
-
-• ok

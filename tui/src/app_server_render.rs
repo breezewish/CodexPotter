@@ -516,18 +516,46 @@ impl AppServerEventProcessor {
         self.saw_agent_delta = false;
     }
 
+    /// Preserve any buffered live transcript content before an explicit exit / shutdown path.
+    ///
+    /// In `Verbosity::Minimal`, streamed agent text is intentionally held until completion because
+    /// `AgentMessageDelta` does not carry `phase`, and once a history cell is inserted we cannot
+    /// retroactively restyle it from normal intensity to dim commentary. Exit paths still need to
+    /// flush that buffered content so the user does not lose in-flight output.
+    fn flush_live_transcript_buffers(&mut self) {
+        self.flush_pending_exploring_cell();
+        self.flush_pending_success_ran_cell();
+        self.flush_agent_stream();
+        self.flush_plan_stream();
+        self.flush_pending_compact_patch_changes();
+    }
+
+    fn should_buffer_agent_stream_until_completion(&self) -> bool {
+        self.verbosity == Verbosity::Minimal && self.saw_agent_delta
+    }
+
     fn on_commit_tick(&mut self) {
         self.run_commit_tick_with_scope(CommitTickScope::AnyMode);
     }
 
     fn run_commit_tick_with_scope(&mut self, scope: CommitTickScope) {
-        let outcome = run_commit_tick(
-            &mut self.adaptive_chunking,
-            Some(&mut self.stream),
-            self.plan_stream.as_mut(),
-            scope,
-            Instant::now(),
-        );
+        let outcome = if self.should_buffer_agent_stream_until_completion() {
+            run_commit_tick(
+                &mut self.adaptive_chunking,
+                None,
+                self.plan_stream.as_mut(),
+                scope,
+                Instant::now(),
+            )
+        } else {
+            run_commit_tick(
+                &mut self.adaptive_chunking,
+                Some(&mut self.stream),
+                self.plan_stream.as_mut(),
+                scope,
+                Instant::now(),
+            )
+        };
         for cell in outcome.cells {
             self.emit_history_cell(cell);
         }
@@ -662,7 +690,9 @@ impl AppServerEventProcessor {
                     self.maybe_emit_final_message_separator();
                 }
                 self.saw_agent_delta = true;
-                if self.stream.push(&ev.delta) {
+                if self.stream.push(&ev.delta)
+                    && !self.should_buffer_agent_stream_until_completion()
+                {
                     self.app_event_tx.send(AppEvent::StartCommitAnimation);
                     self.run_commit_tick_with_scope(CommitTickScope::CatchUpOnly);
                 }
@@ -1261,9 +1291,7 @@ impl RenderAppState {
                         }
                         None => {
                             if !self.exit_after_next_draw {
-                                self.processor.flush_pending_exploring_cell();
-                                self.processor.flush_pending_success_ran_cell();
-                                self.processor.flush_pending_compact_patch_changes();
+                                self.processor.flush_live_transcript_buffers();
                                 self.exit_reason =
                                     ExitReason::Fatal("Backend disconnected".to_string());
                                 self.exit_after_next_draw = true;
@@ -1375,11 +1403,9 @@ impl RenderAppState {
                 if self.codex_op_tx.is_none() {
                     self.prompt_action = Some(PromptScreenAction::CancelledByUser);
                 } else {
-                    // Preserve any live output (for example pending "Explored" / "Ran" cells)
-                    // in the transcript before clearing the inline viewport on exit.
-                    self.processor.flush_pending_exploring_cell();
-                    self.processor.flush_pending_success_ran_cell();
-                    self.processor.flush_pending_compact_patch_changes();
+                    // Preserve any live output in the transcript before clearing the inline
+                    // viewport on exit.
+                    self.processor.flush_live_transcript_buffers();
 
                     self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
 
@@ -1446,12 +1472,9 @@ impl RenderAppState {
                     if self.codex_op_tx.is_none() {
                         self.prompt_action = Some(PromptScreenAction::CancelledByUser);
                     } else {
-                        // Preserve any live output (for example pending "Explored" / "Ran"
-                        // cells) in the transcript before clearing the inline viewport on
-                        // exit.
-                        self.processor.flush_pending_exploring_cell();
-                        self.processor.flush_pending_success_ran_cell();
-                        self.processor.flush_pending_compact_patch_changes();
+                        // Preserve any live output in the transcript before clearing the inline
+                        // viewport on exit.
+                        self.processor.flush_live_transcript_buffers();
 
                         self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
 
@@ -1684,9 +1707,7 @@ impl RenderAppState {
                     self.codex_op_tx.is_some(),
                     "internal error: FatalExitRequest requires backend channels",
                 );
-                self.processor.flush_pending_exploring_cell();
-                self.processor.flush_pending_success_ran_cell();
-                self.processor.flush_pending_compact_patch_changes();
+                self.processor.flush_live_transcript_buffers();
                 self.exit_reason = ExitReason::Fatal(message);
                 self.bottom_pane.set_task_running(false);
                 self.exit_after_next_draw = true;
@@ -2955,6 +2976,58 @@ mod tests {
     }
 
     #[test]
+    fn round_renderer_ctrl_c_flushes_buffered_minimal_agent_stream_before_exit() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let width: u16 = 80;
+        let (tx_raw, mut rx_app) = unbounded_channel::<AppEvent>();
+        let app_event_tx = AppEventSender::new(tx_raw);
+
+        let mut processor = AppServerEventProcessor::new(app_event_tx.clone(), Verbosity::Minimal);
+        processor.handle_codex_event(Event {
+            id: "agent-delta".into(),
+            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+                delta: "hello\n".to_string(),
+            }),
+        });
+        processor.on_commit_tick();
+
+        let (op_tx, _op_rx) = unbounded_channel::<Op>();
+        let bottom_pane = BottomPane::new(BottomPaneParams {
+            frame_requester: crate::tui::FrameRequester::test_dummy(),
+            enhanced_keys_supported: false,
+            app_event_tx: app_event_tx.clone(),
+            animations_enabled: false,
+            placeholder_text: "Assign new task to CodexPotter".to_string(),
+            disable_paste_burst: false,
+        });
+        let file_search = FileSearchManager::new(std::env::temp_dir(), app_event_tx.clone());
+        let mut app = RenderAppState::new(
+            processor,
+            app_event_tx,
+            Some(op_tx),
+            bottom_pane,
+            crate::prompt_history_store::PromptHistoryStore::new(),
+            file_search,
+            VecDeque::new(),
+        );
+
+        app.bottom_pane.set_task_running(true);
+        app.handle_key_event(
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+            crate::tui::FrameRequester::test_dummy(),
+            width,
+        );
+
+        assert!(app.exit_after_next_draw, "expected Ctrl+C to request exit");
+
+        let events = drain_history_cell_strings(&mut rx_app, width);
+        pretty_assertions::assert_eq!(events, vec![vec!["• hello".to_string()]]);
+    }
+
+    #[test]
     fn round_renderer_esc_requests_interrupt_when_task_is_running() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
@@ -3656,6 +3729,49 @@ mod tests {
     }
 
     #[test]
+    fn round_renderer_minimal_buffers_streamed_commentary_until_completion() {
+        let width: u16 = 80;
+
+        let (mut proc, mut rx) = make_round_renderer_processor_without_prompt();
+
+        proc.handle_codex_event(Event {
+            id: "agent-delta".into(),
+            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+                delta: "hello\n".to_string(),
+            }),
+        });
+
+        proc.on_commit_tick();
+        assert!(
+            rx.try_recv().is_err(),
+            "expected minimal mode to wait for completion before committing agent stream"
+        );
+
+        proc.handle_codex_event(Event {
+            id: "agent-message".into(),
+            msg: EventMsg::AgentMessage(AgentMessageEvent {
+                message: "hello\n".to_string(),
+                phase: Some(MessagePhase::Commentary),
+            }),
+        });
+
+        let cell = recv_inserted_history_cell(&mut rx);
+        let lines = cell.display_lines(width);
+        let Some(content) = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .find(|span| span.content.as_ref().contains("hello"))
+        else {
+            panic!("expected hello span");
+        };
+
+        assert!(
+            content.style.add_modifier.contains(Modifier::DIM),
+            "expected completion-flushed commentary span to be dimmed"
+        );
+    }
+
+    #[test]
     fn round_renderer_minimal_keeps_final_answer_agent_messages_normal() {
         let width: u16 = 80;
 
@@ -3721,6 +3837,49 @@ mod tests {
         assert!(
             !content.style.add_modifier.contains(Modifier::DIM),
             "expected streamed final answer span to keep normal intensity"
+        );
+    }
+
+    #[test]
+    fn round_renderer_minimal_buffers_streamed_final_answer_until_completion() {
+        let width: u16 = 80;
+
+        let (mut proc, mut rx) = make_round_renderer_processor_without_prompt();
+
+        proc.handle_codex_event(Event {
+            id: "agent-delta".into(),
+            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+                delta: "done\n".to_string(),
+            }),
+        });
+
+        proc.on_commit_tick();
+        assert!(
+            rx.try_recv().is_err(),
+            "expected minimal mode to wait for final-answer completion before committing agent stream"
+        );
+
+        proc.handle_codex_event(Event {
+            id: "agent-message".into(),
+            msg: EventMsg::AgentMessage(AgentMessageEvent {
+                message: "done\n".to_string(),
+                phase: Some(MessagePhase::FinalAnswer),
+            }),
+        });
+
+        let cell = recv_inserted_history_cell(&mut rx);
+        let lines = cell.display_lines(width);
+        let Some(content) = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .find(|span| span.content.as_ref().contains("done"))
+        else {
+            panic!("expected done span");
+        };
+
+        assert!(
+            !content.style.add_modifier.contains(Modifier::DIM),
+            "expected completion-flushed final answer span to keep normal intensity"
         );
     }
 

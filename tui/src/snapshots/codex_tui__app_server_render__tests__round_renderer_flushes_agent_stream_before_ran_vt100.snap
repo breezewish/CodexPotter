@@ -7,13 +7,13 @@ expression: terminal.backend().vt100().screen().contents()
 
 
 
-
-
 › test prompt
 
 
 • first message.
 
 • Ran echo tool
+
+────────────────────────────────────────────────────────────────────────────────
 
 • second message.

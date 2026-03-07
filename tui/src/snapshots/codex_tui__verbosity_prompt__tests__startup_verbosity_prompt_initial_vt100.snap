@@ -7,9 +7,9 @@ expression: terminal.backend().vt100().screen().contents()
   Setup 2/2                                          • I'll first align the rollout and rendering
                                                        pipeline, then implement /verbosity.
   Select Verbosity
-  Choose how interim transcript items are shown      • Edited 2 files (+3 -1)
-                                                       └ protocol/src/models.rs (+2 -1)
-› 1. Minimal (default)  Dim commentary and hide          protocol/src/protocol.rs (+1 -0)
+  Choose how interim transcript items are shown      • Changed 2 files (+3 -1)
+                                                       └ Edited protocol/src/models.rs (+2 -1)
+› 1. Minimal (default)  Dim commentary and hide          Edited protocol/src/protocol.rs (+1 -0)
                         tool chatter
   2. Simple             Show interim items           • Final answer text stays fully visible.
                         normally

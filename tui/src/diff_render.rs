@@ -382,7 +382,7 @@ pub fn create_compact_diff_summary(
         header_spans.push(" ".into());
         header_spans.extend(render_line_count_summary(row.added, row.removed));
     } else {
-        header_spans.push("Edited".bold());
+        header_spans.push("Changed".bold());
         header_spans.push(format!(" {file_count} {noun} ").into());
         header_spans.extend(render_line_count_summary(total_added, total_removed));
     }
@@ -399,6 +399,13 @@ pub fn create_compact_diff_summary(
         } else {
             file_spans.push("    ".dim());
         }
+        let verb = match &row.change {
+            FileChange::Add { .. } => "Added",
+            FileChange::Delete { .. } => "Deleted",
+            _ => "Edited",
+        };
+        file_spans.push(verb.bold());
+        file_spans.push(" ".into());
         file_spans.extend(render_path(row));
         file_spans.push(" ".into());
         file_spans.extend(render_line_count_summary(row.added, row.removed));

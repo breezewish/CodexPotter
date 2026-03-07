@@ -5,8 +5,8 @@ expression: lines
   • I'll first align the rollout and rendering pipeline, then           
     implement /verbosity.                                               
                                                                         
-  • Edited 2 files (+3 -1)                                              
-    └ protocol/src/models.rs (+2 -1)                                    
-      protocol/src/protocol.rs (+1 -0)                                  
+  • Changed 2 files (+3 -1)                                             
+    └ Edited protocol/src/models.rs (+2 -1)                             
+      Edited protocol/src/protocol.rs (+1 -0)                           
                                                                         
   • Final answer text stays fully visible.

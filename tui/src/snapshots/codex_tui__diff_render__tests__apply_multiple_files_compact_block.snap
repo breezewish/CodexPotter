@@ -2,9 +2,9 @@
 source: tui/src/diff_render.rs
 expression: terminal.backend()
 ---
-"• Edited 2 files (+2 -1)                                                        "
-"  └ a.txt (+1 -1)                                                               "
-"    b.txt (+1 -0)                                                               "
+"• Changed 2 files (+2 -1)                                                       "
+"  └ Edited a.txt (+1 -1)                                                        "
+"    Added b.txt (+1 -0)                                                         "
 "                                                                                "
 "                                                                                "
 "                                                                                "

@@ -904,10 +904,16 @@ impl AppServerEventProcessor {
             return;
         }
 
-        if self.verbosity == Verbosity::Minimal
-            && matches!(msg, EventMsg::PatchApplyEnd(ev) if ev.success)
-        {
-            return;
+        if self.verbosity == Verbosity::Minimal {
+            // In `Verbosity::Minimal` we render patch applications as compact `Edited ...` items
+            // and coalesce adjacent patch applications. Many event types are suppressed entirely
+            // in this verbosity level, but patch-apply begin markers are the main one that should
+            // not break coalescing.
+            match msg {
+                EventMsg::PatchApplyBegin(_) => return,
+                EventMsg::PatchApplyEnd(ev) if ev.success => return,
+                _ => {}
+            }
         }
 
         self.flush_pending_compact_patch_changes();
@@ -1930,6 +1936,7 @@ mod tests {
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::ExecCommandEndEvent;
     use codex_protocol::protocol::ExecCommandSource;
+    use codex_protocol::protocol::PatchApplyBeginEvent;
     use codex_protocol::protocol::PatchApplyEndEvent;
     use codex_protocol::protocol::PlanDeltaEvent;
     use codex_protocol::protocol::SessionConfiguredEvent;
@@ -4720,6 +4727,15 @@ mod tests {
             );
 
             proc.handle_codex_event(Event {
+                id: format!("{id}-begin"),
+                msg: EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
+                    call_id: id.into(),
+                    turn_id: "turn-1".into(),
+                    auto_approved: true,
+                    changes: changes.clone(),
+                }),
+            });
+            proc.handle_codex_event(Event {
                 id: id.into(),
                 msg: EventMsg::PatchApplyEnd(PatchApplyEndEvent {
                     call_id: id.into(),
@@ -4745,6 +4761,103 @@ mod tests {
             panic!("expected patch, separator, then agent message");
         };
         pretty_assertions::assert_eq!(patch, &vec!["• Edited file.txt (+2 -2)".to_string()]);
+        assert!(
+            separator
+                .first()
+                .is_some_and(|line| line.chars().all(|ch| ch == '─')),
+            "expected a final message separator"
+        );
+        pretty_assertions::assert_eq!(agent_message, &vec!["• ok".to_string()]);
+    }
+
+    #[test]
+    fn round_renderer_minimal_coalesces_patch_cells_into_changed_file_list() {
+        let width: u16 = 80;
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let app_event_tx = AppEventSender::new(tx_raw);
+
+        let mut proc = AppServerEventProcessor::new(app_event_tx, Verbosity::default());
+
+        let patch_a = diffy::create_patch("old\n", "new\n").to_string();
+        let mut changes_a: HashMap<PathBuf, codex_protocol::protocol::FileChange> = HashMap::new();
+        changes_a.insert(
+            PathBuf::from("a.txt"),
+            codex_protocol::protocol::FileChange::Update {
+                unified_diff: patch_a,
+                move_path: None,
+            },
+        );
+
+        proc.handle_codex_event(Event {
+            id: "patch-a-begin".into(),
+            msg: EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
+                call_id: "patch-a".into(),
+                turn_id: "turn-1".into(),
+                auto_approved: true,
+                changes: changes_a.clone(),
+            }),
+        });
+        proc.handle_codex_event(Event {
+            id: "patch-a-end".into(),
+            msg: EventMsg::PatchApplyEnd(PatchApplyEndEvent {
+                call_id: "patch-a".into(),
+                turn_id: "turn-1".into(),
+                stdout: String::new(),
+                stderr: String::new(),
+                success: true,
+                changes: changes_a,
+            }),
+        });
+
+        let mut changes_b: HashMap<PathBuf, codex_protocol::protocol::FileChange> = HashMap::new();
+        changes_b.insert(
+            PathBuf::from("b.txt"),
+            codex_protocol::protocol::FileChange::Add {
+                content: "new\n".to_string(),
+            },
+        );
+
+        proc.handle_codex_event(Event {
+            id: "patch-b-begin".into(),
+            msg: EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
+                call_id: "patch-b".into(),
+                turn_id: "turn-1".into(),
+                auto_approved: true,
+                changes: changes_b.clone(),
+            }),
+        });
+        proc.handle_codex_event(Event {
+            id: "patch-b-end".into(),
+            msg: EventMsg::PatchApplyEnd(PatchApplyEndEvent {
+                call_id: "patch-b".into(),
+                turn_id: "turn-1".into(),
+                stdout: String::new(),
+                stderr: String::new(),
+                success: true,
+                changes: changes_b,
+            }),
+        });
+
+        proc.handle_codex_event(Event {
+            id: "agent-message".into(),
+            msg: EventMsg::AgentMessage(AgentMessageEvent {
+                message: "ok".into(),
+                phase: None,
+            }),
+        });
+
+        let events = drain_history_cell_strings(&mut rx, width);
+        let [patch, separator, agent_message] = events.as_slice() else {
+            panic!("expected patch, separator, then agent message");
+        };
+        pretty_assertions::assert_eq!(
+            patch,
+            &vec![
+                "• Changed 2 files (+2 -1)".to_string(),
+                "  └ Edited a.txt (+1 -1)".to_string(),
+                "    Added b.txt (+1 -0)".to_string(),
+            ]
+        );
         assert!(
             separator
                 .first()

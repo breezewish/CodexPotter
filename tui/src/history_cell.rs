@@ -550,17 +550,45 @@ pub fn new_coalesced_compact_patch_event(
 
     #[derive(Clone, Debug)]
     struct Summary {
-        verb: Verb,
+        last_verb: Verb,
+        saw_add: bool,
+        saw_delete: bool,
         move_path: Option<PathBuf>,
         added: usize,
         removed: usize,
     }
 
-    fn merge_verb(existing: Verb, next: Verb) -> Verb {
-        match (existing, next) {
-            (Verb::Deleted, _) | (_, Verb::Deleted) => Verb::Deleted,
-            (Verb::Added, _) | (_, Verb::Added) => Verb::Added,
-            _ => Verb::Edited,
+    impl Summary {
+        fn new(verb: Verb) -> Self {
+            Self {
+                last_verb: verb,
+                saw_add: verb == Verb::Added,
+                saw_delete: verb == Verb::Deleted,
+                move_path: None,
+                added: 0,
+                removed: 0,
+            }
+        }
+
+        fn update_verb(&mut self, verb: Verb) {
+            self.last_verb = verb;
+            self.saw_add |= verb == Verb::Added;
+            self.saw_delete |= verb == Verb::Deleted;
+        }
+
+        fn display_verb(&self) -> Verb {
+            if self.last_verb == Verb::Deleted {
+                return Verb::Deleted;
+            }
+            if self.saw_add && self.saw_delete {
+                // A delete followed by an add (or vice versa) is best presented as an edit, since
+                // the final on-disk state is a replacement rather than a net add/delete.
+                return Verb::Edited;
+            }
+            if self.saw_add {
+                return Verb::Added;
+            }
+            Verb::Edited
         }
     }
 
@@ -614,13 +642,8 @@ pub fn new_coalesced_compact_patch_event(
                 _ => None,
             };
 
-            let entry = merged.entry(path).or_insert_with(|| Summary {
-                verb,
-                move_path: None,
-                added: 0,
-                removed: 0,
-            });
-            entry.verb = merge_verb(entry.verb, verb);
+            let entry = merged.entry(path).or_insert_with(|| Summary::new(verb));
+            entry.update_verb(verb);
             if move_path.is_some() {
                 entry.move_path = move_path;
             }
@@ -654,7 +677,7 @@ pub fn new_coalesced_compact_patch_event(
     let mut out: Vec<Line<'static>> = Vec::new();
     let mut header_spans: Vec<Span<'static>> = vec!["• ".dim()];
     if let [(path, summary)] = &rows[..] {
-        let verb = match summary.verb {
+        let verb = match summary.display_verb() {
             Verb::Added => "Added",
             Verb::Deleted => "Deleted",
             Verb::Edited => "Edited",
@@ -665,7 +688,7 @@ pub fn new_coalesced_compact_patch_event(
         header_spans.push(" ".into());
         header_spans.extend(render_line_count_summary(summary.added, summary.removed));
     } else {
-        header_spans.push("Edited".bold());
+        header_spans.push("Changed".bold());
         header_spans.push(format!(" {file_count} {noun} ").into());
         header_spans.extend(render_line_count_summary(total_added, total_removed));
     }
@@ -675,6 +698,13 @@ pub fn new_coalesced_compact_patch_event(
         for (idx, (path, summary)) in rows.into_iter().enumerate() {
             let prefix = if idx == 0 { "  └ " } else { "    " };
             let mut file_spans: Vec<Span<'static>> = vec![prefix.dim()];
+            let verb = match summary.display_verb() {
+                Verb::Added => "Added",
+                Verb::Deleted => "Deleted",
+                Verb::Edited => "Edited",
+            };
+            file_spans.push(verb.bold());
+            file_spans.push(" ".into());
             file_spans.extend(render_path(&path, summary.move_path.as_ref()));
             file_spans.push(" ".into());
             file_spans.extend(render_line_count_summary(summary.added, summary.removed));

@@ -281,6 +281,10 @@ pub enum ResolveInterruptAction {
 pub struct ProjectResolveInterruptParams {
     pub project_id: String,
     pub action: ResolveInterruptAction,
+    /// Optional prompt override for the next turn.
+    ///
+    /// Required when `action` is [`ResolveInterruptAction::Continue`]. The server uses this as the
+    /// first turn prompt when retrying the interrupted round.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_prompt_override: Option<String>,
 }

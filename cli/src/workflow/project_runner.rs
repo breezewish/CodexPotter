@@ -19,6 +19,7 @@ use codex_tui::InterruptedProjectAction;
 
 use crate::workflow::round_runner::UiFuture;
 
+// Sentinel prompt for `Interrupt -> Continue`: forces a new turn while retrying the same round.
 const PROGRESS_FILE_CHANGED_TURN_PROMPT_OVERRIDE: &str = "Progress file has been changed by user";
 
 /// Runtime configuration for running one or more CodexPotter projects.

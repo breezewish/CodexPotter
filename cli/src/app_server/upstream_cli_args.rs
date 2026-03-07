@@ -155,15 +155,21 @@ impl UpstreamCodexCliArgs {
 fn toml_string_literal(input: &str) -> String {
     // Encode as a TOML basic string so upstream parses these values as strings even if they look
     // like TOML scalars (e.g. "true", "42").
+    //
+    // We escape all control characters (including C1 controls) to ensure the produced value is a
+    // single-line, valid TOML string literal that can safely be embedded in `--config key=value`.
     let mut out = String::with_capacity(input.len() + 2);
     out.push('"');
     for ch in input.chars() {
         match ch {
             '\\' => out.push_str("\\\\"),
             '"' => out.push_str("\\\""),
+            '\u{08}' => out.push_str("\\b"),
             '\n' => out.push_str("\\n"),
+            '\u{0C}' => out.push_str("\\f"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
+            ch if ch.is_control() => out.push_str(&format!("\\u{:04X}", ch as u32)),
             ch => out.push(ch),
         }
     }
@@ -243,5 +249,14 @@ mod tests {
                 .map(ToString::to_string)
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn toml_string_literal_escapes_control_characters() {
+        assert_eq!(toml_string_literal("a\u{08}b"), "\"a\\bb\"");
+        assert_eq!(toml_string_literal("a\u{0C}b"), "\"a\\fb\"");
+        assert_eq!(toml_string_literal("a\u{1F}b"), "\"a\\u001Fb\"");
+        assert_eq!(toml_string_literal("a\u{7F}b"), "\"a\\u007Fb\"");
+        assert_eq!(toml_string_literal("a\u{85}b"), "\"a\\u0085b\"");
     }
 }

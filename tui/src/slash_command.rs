@@ -20,7 +20,7 @@ impl SlashCommand {
         match self {
             SlashCommand::Mention => "mention a file",
             SlashCommand::Theme => "choose a syntax highlighting theme",
-            SlashCommand::Verbosity => "choose how interim transcript items are shown",
+            SlashCommand::Verbosity => "choose how much detail to show",
             SlashCommand::Exit => "exit Codex",
         }
     }

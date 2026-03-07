@@ -6,18 +6,226 @@
 //! `[tui].verbosity` is configured yet. Upstream Codex TUI does not show this prompt. See
 //! `tui/AGENTS.md`.
 
+use std::sync::Arc;
+use std::sync::Mutex;
+
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
+use ratatui::buffer::Buffer;
+use ratatui::layout::Constraint;
+use ratatui::layout::Layout;
+use ratatui::layout::Rect;
 use ratatui::prelude::Widget as _;
+use ratatui::style::Stylize as _;
+use ratatui::text::Line;
+use ratatui::widgets::Paragraph;
 use tokio_stream::StreamExt;
 
 use crate::StartupSetupStep;
 use crate::bottom_pane::ListSelectionView;
+use crate::bottom_pane::SideContentWidth;
+use crate::bottom_pane::popup_content_width;
+use crate::bottom_pane::side_by_side_layout_widths;
 use crate::render::renderable::Renderable;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
 use crate::verbosity::Verbosity;
+use crate::wrapping::RtOptions;
+use crate::wrapping::word_wrap_line;
+
+struct StartupVerbosityPromptView {
+    view: ListSelectionView,
+    selected_for_preview: Arc<Mutex<Verbosity>>,
+    side_content_width: SideContentWidth,
+    side_content_min_width: u16,
+}
+
+fn build_startup_prompt_view(
+    setup_step: Option<StartupSetupStep>,
+    app_event_tx: crate::app_event_sender::AppEventSender,
+) -> StartupVerbosityPromptView {
+    let mut params = crate::verbosity_picker::build_startup_verbosity_picker_params(setup_step);
+    params.footer_note = None;
+    params.footer_hint = None;
+
+    let selected_for_preview = Arc::new(Mutex::new(Verbosity::Minimal));
+    let selected_for_preview_on_change = selected_for_preview.clone();
+    let existing_on_selection_changed = params.on_selection_changed;
+    params.on_selection_changed = Some(Box::new(move |idx: usize, tx: &_| {
+        let modes = [Verbosity::Minimal, Verbosity::Simple];
+        if let Some(verbosity) = modes.get(idx).copied() {
+            let mut guard = match selected_for_preview_on_change.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            *guard = verbosity;
+        }
+        if let Some(cb) = &existing_on_selection_changed {
+            cb(idx, tx);
+        }
+    }));
+
+    StartupVerbosityPromptView {
+        side_content_width: params.side_content_width,
+        side_content_min_width: params.side_content_min_width,
+        view: ListSelectionView::new(params, app_event_tx),
+        selected_for_preview,
+    }
+}
+
+fn desired_height(
+    width: u16,
+    view: &ListSelectionView,
+    side_content_width: SideContentWidth,
+    side_content_min_width: u16,
+) -> u16 {
+    let width = width.max(1);
+    let note_line = Line::from(vec![
+        "You can change this later via ".into(),
+        "/verbosity".cyan(),
+        ".".into(),
+    ])
+    .dim();
+    let note_width = width.saturating_sub(2).max(1) as usize;
+    let note_lines = word_wrap_line(
+        &note_line,
+        RtOptions::new(note_width)
+            .initial_indent(Line::from(""))
+            .subsequent_indent(Line::from("")),
+    );
+
+    let inner_width = popup_content_width(width);
+    let is_narrow =
+        side_by_side_layout_widths(inner_width, side_content_width, side_content_min_width)
+            .is_none();
+    let preview_width = width.saturating_sub(2).max(1);
+    let preview_section_height = if is_narrow {
+        crate::verbosity_picker::preview_required_height(preview_width).saturating_add(3)
+    } else {
+        0
+    };
+    let below_height = u16::try_from(1 + note_lines.len()).unwrap_or(u16::MAX);
+    let below_height = below_height.saturating_add(preview_section_height);
+
+    view.desired_height(width)
+        .saturating_add(below_height)
+        .saturating_add(1)
+}
+
+fn render_startup_prompt(
+    area: Rect,
+    buf: &mut Buffer,
+    view: &ListSelectionView,
+    selected_for_preview: &Arc<Mutex<Verbosity>>,
+    side_content_width: SideContentWidth,
+    side_content_min_width: u16,
+) {
+    ratatui::widgets::Clear.render(area, buf);
+
+    let width = area.width.max(1);
+    if area.height <= 1 {
+        return;
+    }
+    let view_area = Rect::new(
+        area.x,
+        area.y.saturating_add(1),
+        area.width,
+        area.height - 1,
+    );
+    if view_area.is_empty() {
+        return;
+    }
+
+    let hint_line = Line::from(vec![
+        "Press ".into(),
+        crate::key_hint::plain(KeyCode::Enter).into(),
+        " to confirm or ".into(),
+        crate::key_hint::plain(KeyCode::Esc).into(),
+        " to skip".into(),
+    ]);
+    let note_line = Line::from(vec![
+        "You can change this later via ".into(),
+        "/verbosity".cyan(),
+        ".".into(),
+    ])
+    .dim();
+    let note_width = width.saturating_sub(2).max(1) as usize;
+    let note_lines = word_wrap_line(
+        &note_line,
+        RtOptions::new(note_width)
+            .initial_indent(Line::from(""))
+            .subsequent_indent(Line::from("")),
+    );
+
+    let inner_width = popup_content_width(width);
+    let is_narrow =
+        side_by_side_layout_widths(inner_width, side_content_width, side_content_min_width)
+            .is_none();
+
+    let available_height = view_area.height;
+    let below_min_height = u16::try_from(1 + note_lines.len()).unwrap_or(u16::MAX);
+    let selection_height = if available_height > below_min_height {
+        view.desired_height(width)
+            .min(available_height.saturating_sub(below_min_height))
+    } else {
+        available_height
+    };
+    let below_height = available_height.saturating_sub(selection_height);
+
+    let [selection_area, below_area] = Layout::vertical([
+        Constraint::Length(selection_height),
+        Constraint::Length(below_height),
+    ])
+    .areas(view_area);
+
+    view.render(selection_area, buf);
+
+    if below_area.height == 0 || below_area.width <= 2 {
+        return;
+    }
+
+    let below_x = below_area.x.saturating_add(2);
+    let below_width = below_area.width.saturating_sub(2);
+    let mut cursor_y = below_area.y;
+
+    // Hint line.
+    if cursor_y < below_area.bottom() {
+        let line_area = Rect::new(below_x, cursor_y, below_width, 1);
+        hint_line.dim().render(line_area, buf);
+        cursor_y = cursor_y.saturating_add(1);
+    }
+
+    // Note lines.
+    for line in &note_lines {
+        if cursor_y >= below_area.bottom() {
+            break;
+        }
+        let line_area = Rect::new(below_x, cursor_y, below_width, 1);
+        line.clone().render(line_area, buf);
+        cursor_y = cursor_y.saturating_add(1);
+    }
+
+    // Preview (narrow layout only; truncated to remaining height).
+    if !is_narrow || cursor_y >= below_area.bottom() {
+        return;
+    }
+
+    let remaining_height = below_area.bottom().saturating_sub(cursor_y);
+    let preview_area = Rect::new(below_x, cursor_y, below_width, remaining_height);
+    let selected = match selected_for_preview.lock() {
+        Ok(guard) => *guard,
+        Err(poisoned) => *poisoned.into_inner(),
+    };
+    let preview_width = width.saturating_sub(2).max(1);
+    let mut preview_lines: Vec<Line<'static>> =
+        vec!["".into(), Line::from("Preview".dim().italic()), "".into()];
+    preview_lines.extend(crate::verbosity_picker::build_full_preview_lines(
+        selected,
+        preview_width,
+    ));
+    Paragraph::new(ratatui::text::Text::from(preview_lines)).render(preview_area, buf);
+}
 
 /// Prompt the user to pick a verbosity level for interim transcript items.
 ///
@@ -31,35 +239,35 @@ pub async fn run_startup_verbosity_prompt_with_tui(
     tui: &mut Tui,
     setup_step: Option<StartupSetupStep>,
 ) -> anyhow::Result<Option<Verbosity>> {
-    let params = crate::verbosity_picker::build_startup_verbosity_picker_params(setup_step);
-
     let (app_event_tx, _app_event_rx) = tokio::sync::mpsc::unbounded_channel();
     let app_event_tx = crate::app_event_sender::AppEventSender::new(app_event_tx);
-    let mut view = ListSelectionView::new(params, app_event_tx);
+    let mut prompt_view = build_startup_prompt_view(setup_step, app_event_tx);
+    let selected_for_preview = prompt_view.selected_for_preview.clone();
+    let side_content_width = prompt_view.side_content_width;
+    let side_content_min_width = prompt_view.side_content_min_width;
 
     let render_view = |tui: &mut Tui, view: &ListSelectionView| -> anyhow::Result<()> {
         let width = tui.terminal.last_known_screen_size.width.max(1);
-        let height = view.desired_height(width).saturating_add(1);
+        let height = desired_height(width, view, side_content_width, side_content_min_width);
         tui.draw(height, |frame| {
-            let area = frame.area();
-            ratatui::widgets::Clear.render(area, frame.buffer_mut());
-            let view_area = ratatui::layout::Rect::new(
-                area.x,
-                area.y.saturating_add(1),
-                area.width,
-                area.height.saturating_sub(1),
+            render_startup_prompt(
+                frame.area(),
+                frame.buffer_mut(),
+                view,
+                &selected_for_preview,
+                side_content_width,
+                side_content_min_width,
             );
-            view.render(view_area, frame.buffer_mut());
         })?;
         Ok(())
     };
 
-    render_view(tui, &view)?;
+    render_view(tui, &prompt_view.view)?;
 
     let events = tui.event_stream();
     tokio::pin!(events);
 
-    while !view.is_complete() {
+    while !prompt_view.view.is_complete() {
         let Some(event) = events.next().await else {
             break;
         };
@@ -72,15 +280,15 @@ pub async fn run_startup_verbosity_prompt_with_tui(
                     && matches!(key_event.code, KeyCode::Char('c') | KeyCode::Char('d'))
                     && key_event.kind == KeyEventKind::Press
                 {
-                    view.cancel();
+                    prompt_view.view.cancel();
                 } else {
-                    view.handle_key_event(key_event);
+                    prompt_view.view.handle_key_event(key_event);
                 }
                 tui.frame_requester().schedule_frame();
             }
             TuiEvent::Paste(_) => {}
             TuiEvent::Draw => {
-                render_view(tui, &view)?;
+                render_view(tui, &prompt_view.view)?;
             }
         }
     }
@@ -90,7 +298,8 @@ pub async fn run_startup_verbosity_prompt_with_tui(
     tui.terminal.clear()?;
 
     let modes = [Verbosity::Minimal, Verbosity::Simple];
-    Ok(view
+    Ok(prompt_view
+        .view
         .take_last_selected_index()
         .and_then(|idx| modes.get(idx).copied()))
 }
@@ -99,7 +308,6 @@ pub async fn run_startup_verbosity_prompt_with_tui(
 mod tests {
     use super::*;
     use crate::app_event_sender::AppEventSender;
-    use crate::render::renderable::Renderable;
     use crate::test_backend::VT100Backend;
     use insta::assert_snapshot;
     use ratatui::Terminal;
@@ -109,29 +317,30 @@ mod tests {
     fn startup_verbosity_prompt_initial_vt100() {
         let width: u16 = 100;
 
-        let params = crate::verbosity_picker::build_startup_verbosity_picker_params(Some(
-            StartupSetupStep::new(2, 2),
-        ));
-
         let (app_event_tx, _app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
-        let view = ListSelectionView::new(params, app_event_tx);
+        let prompt_view =
+            build_startup_prompt_view(Some(StartupSetupStep::new(2, 2)), app_event_tx);
 
-        let height = view.desired_height(width).saturating_add(1);
+        let height = desired_height(
+            width,
+            &prompt_view.view,
+            prompt_view.side_content_width,
+            prompt_view.side_content_min_width,
+        );
         let backend = VT100Backend::new(width, height);
         let mut terminal = Terminal::new(backend).expect("create terminal");
 
         terminal
             .draw(|frame| {
-                let area = frame.area();
-                ratatui::widgets::Clear.render(area, frame.buffer_mut());
-                let view_area = ratatui::layout::Rect::new(
-                    area.x,
-                    area.y.saturating_add(1),
-                    area.width,
-                    area.height.saturating_sub(1),
+                render_startup_prompt(
+                    frame.area(),
+                    frame.buffer_mut(),
+                    &prompt_view.view,
+                    &prompt_view.selected_for_preview,
+                    prompt_view.side_content_width,
+                    prompt_view.side_content_min_width,
                 );
-                view.render(view_area, frame.buffer_mut());
             })
             .expect("draw");
 
@@ -145,29 +354,30 @@ mod tests {
     fn startup_verbosity_prompt_narrow_vt100() {
         let width: u16 = 80;
 
-        let params = crate::verbosity_picker::build_startup_verbosity_picker_params(Some(
-            StartupSetupStep::new(2, 2),
-        ));
-
         let (app_event_tx, _app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
-        let view = ListSelectionView::new(params, app_event_tx);
+        let prompt_view =
+            build_startup_prompt_view(Some(StartupSetupStep::new(2, 2)), app_event_tx);
 
-        let height = view.desired_height(width).saturating_add(1);
+        let height = desired_height(
+            width,
+            &prompt_view.view,
+            prompt_view.side_content_width,
+            prompt_view.side_content_min_width,
+        );
         let backend = VT100Backend::new(width, height);
         let mut terminal = Terminal::new(backend).expect("create terminal");
 
         terminal
             .draw(|frame| {
-                let area = frame.area();
-                ratatui::widgets::Clear.render(area, frame.buffer_mut());
-                let view_area = ratatui::layout::Rect::new(
-                    area.x,
-                    area.y.saturating_add(1),
-                    area.width,
-                    area.height.saturating_sub(1),
+                render_startup_prompt(
+                    frame.area(),
+                    frame.buffer_mut(),
+                    &prompt_view.view,
+                    &prompt_view.selected_for_preview,
+                    prompt_view.side_content_width,
+                    prompt_view.side_content_min_width,
                 );
-                view.render(view_area, frame.buffer_mut());
             })
             .expect("draw");
 

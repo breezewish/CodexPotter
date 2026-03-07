@@ -36,17 +36,7 @@ const WIDE_PREVIEW_MIN_WIDTH: u16 = 40;
 /// Left inset used for wide preview content.
 const WIDE_PREVIEW_LEFT_INSET: u16 = 2;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum StackedPreviewMode {
-    Hidden,
-    FullWithLabel,
-}
-
 struct VerbosityPreviewWideRenderable {
-    selected: Arc<Mutex<Verbosity>>,
-}
-
-struct VerbosityPreviewStackedFullRenderable {
     selected: Arc<Mutex<Verbosity>>,
 }
 
@@ -61,11 +51,7 @@ fn dim_lines(lines: &mut [Line<'static>]) {
 
 fn preview_commentary_cell(verbosity: Verbosity) -> history_cell::AgentMessageCell {
     let mut lines: Vec<Line<'static>> = Vec::new();
-    crate::markdown::append_markdown(
-        "I'll first align the rollout and rendering pipeline, then implement `/verbosity`.",
-        None,
-        &mut lines,
-    );
+    crate::markdown::append_markdown("I'll first align the rendering pipeline.", None, &mut lines);
     if verbosity == Verbosity::Minimal {
         dim_lines(&mut lines);
     }
@@ -159,7 +145,8 @@ fn append_preview_cell(
     out.append(&mut lines);
 }
 
-fn build_full_preview_lines(verbosity: Verbosity, width: u16) -> Vec<Line<'static>> {
+/// Builds the preview lines shown in the verbosity picker UI.
+pub fn build_full_preview_lines(verbosity: Verbosity, width: u16) -> Vec<Line<'static>> {
     let width = width.max(1);
     let mut out: Vec<Line<'static>> = Vec::new();
 
@@ -182,7 +169,8 @@ fn build_full_preview_lines(verbosity: Verbosity, width: u16) -> Vec<Line<'stati
     out
 }
 
-fn preview_required_height(width: u16) -> u16 {
+/// Returns the preview height required to show the tallest verbosity mode without truncation.
+pub fn preview_required_height(width: u16) -> u16 {
     let minimal = build_full_preview_lines(Verbosity::Minimal, width);
     let simple = build_full_preview_lines(Verbosity::Simple, width);
     u16::try_from(minimal.len().max(simple.len())).unwrap_or(u16::MAX)
@@ -224,39 +212,6 @@ impl Renderable for VerbosityPreviewWideRenderable {
     }
 }
 
-impl Renderable for VerbosityPreviewStackedFullRenderable {
-    fn desired_height(&self, width: u16) -> u16 {
-        if width == 0 {
-            return 0;
-        }
-        preview_required_height(width).saturating_add(1)
-    }
-
-    fn render(&self, area: Rect, buf: &mut Buffer) {
-        if area.is_empty() {
-            return;
-        }
-
-        let label_area = Rect::new(area.x, area.y, area.width, 1.min(area.height));
-        Line::from("Preview".dim().italic()).render(label_area, buf);
-        if area.height <= 1 {
-            return;
-        }
-
-        let preview_area = Rect::new(
-            area.x,
-            area.y.saturating_add(1),
-            area.width,
-            area.height - 1,
-        );
-        let verbosity = match self.selected.lock() {
-            Ok(guard) => *guard,
-            Err(poisoned) => *poisoned.into_inner(),
-        };
-        render_preview(preview_area, buf, verbosity, 0);
-    }
-}
-
 fn startup_picker_header(setup_step: Option<StartupSetupStep>) -> Box<dyn Renderable> {
     let Some(step) = setup_step.filter(|step| step.should_render()) else {
         return Box::new(());
@@ -274,7 +229,6 @@ fn build_verbosity_picker_params_impl(
     header: Box<dyn Renderable>,
     footer_note: Option<Line<'static>>,
     include_actions: bool,
-    stacked_preview_mode: StackedPreviewMode,
 ) -> SelectionViewParams {
     let selected_mode = Arc::new(Mutex::new(initial));
     let selected_for_preview = selected_mode.clone();
@@ -329,24 +283,19 @@ fn build_verbosity_picker_params_impl(
 
     SelectionViewParams {
         title: Some("Select Verbosity".to_string()),
-        subtitle: Some("Choose how interim transcript items are shown".to_string()),
+        subtitle: Some("Choose how much detail to show".to_string()),
         footer_note,
         footer_hint: Some(standard_popup_hint_line()),
         items,
         header,
         initial_selected_idx,
         side_content: Box::new(VerbosityPreviewWideRenderable {
-            selected: selected_mode.clone(),
+            selected: selected_mode,
         }),
         side_content_width: SideContentWidth::Half,
         side_content_min_width: WIDE_PREVIEW_MIN_WIDTH,
         fit_popup_height_to_side_content: true,
-        stacked_side_content: Some(match stacked_preview_mode {
-            StackedPreviewMode::Hidden => Box::new(()),
-            StackedPreviewMode::FullWithLabel => Box::new(VerbosityPreviewStackedFullRenderable {
-                selected: selected_mode,
-            }),
-        }),
+        stacked_side_content: Some(Box::new(())),
         preserve_side_content_bg: true,
         on_selection_changed,
         ..Default::default()
@@ -355,14 +304,7 @@ fn build_verbosity_picker_params_impl(
 
 /// Builds [`SelectionViewParams`] for the `/verbosity` picker dialog.
 pub fn build_verbosity_picker_params(current: Verbosity) -> SelectionViewParams {
-    build_verbosity_picker_params_impl(
-        Some(current),
-        current,
-        Box::new(()),
-        None,
-        true,
-        StackedPreviewMode::Hidden,
-    )
+    build_verbosity_picker_params_impl(Some(current), current, Box::new(()), None, true)
 }
 
 /// Builds [`SelectionViewParams`] for the startup verbosity onboarding prompt.
@@ -377,7 +319,6 @@ pub fn build_startup_verbosity_picker_params(
         startup_picker_header(setup_step),
         Some(Line::from("You can change this later via /verbosity.").dim()),
         false,
-        StackedPreviewMode::FullWithLabel,
     )
 }
 

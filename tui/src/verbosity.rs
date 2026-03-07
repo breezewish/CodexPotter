@@ -18,8 +18,8 @@ impl Verbosity {
 
     pub fn description(self) -> &'static str {
         match self {
-            Verbosity::Minimal => "Dim commentary and hide tool chatter",
-            Verbosity::Simple => "Show interim items normally",
+            Verbosity::Minimal => "Show results only",
+            Verbosity::Simple => "Show key progress updates",
         }
     }
 

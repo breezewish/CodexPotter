@@ -2,8 +2,7 @@
 source: tui/src/verbosity_picker.rs
 expression: lines
 ---
-  • I'll first align the rollout and rendering pipeline, then           
-    implement /verbosity.                                               
+  • I'll first align the rendering pipeline.                            
                                                                         
   • Changed 2 files (+3 -1)                                             
     └ Edited protocol/src/models.rs (+2 -1)                             

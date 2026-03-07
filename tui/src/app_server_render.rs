@@ -4865,6 +4865,13 @@ mod tests {
         });
 
         proc.handle_codex_event(Event {
+            id: "thread-rolled-back".into(),
+            msg: EventMsg::ThreadRolledBack(codex_protocol::protocol::ThreadRolledBackEvent {
+                num_turns: 1,
+            }),
+        });
+
+        proc.handle_codex_event(Event {
             id: "ran-failed".into(),
             msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                 call_id: "ran-failed".into(),
@@ -4934,6 +4941,48 @@ mod tests {
             "expected a final message separator"
         );
         pretty_assertions::assert_eq!(agent_message, &vec!["• ok".to_string()]);
+    }
+
+    #[test]
+    fn round_renderer_minimal_flushes_pending_patch_summary_on_turn_complete() {
+        let width: u16 = 80;
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let app_event_tx = AppEventSender::new(tx_raw);
+
+        let mut proc = AppServerEventProcessor::new(app_event_tx, Verbosity::Minimal);
+
+        let patch = diffy::create_patch("a\n", "b\n").to_string();
+        let mut changes: HashMap<PathBuf, codex_protocol::protocol::FileChange> = HashMap::new();
+        changes.insert(
+            PathBuf::from("file.txt"),
+            codex_protocol::protocol::FileChange::Update {
+                unified_diff: patch,
+                move_path: None,
+            },
+        );
+
+        proc.handle_codex_event(Event {
+            id: "patch-end".into(),
+            msg: EventMsg::PatchApplyEnd(PatchApplyEndEvent {
+                call_id: "patch".into(),
+                turn_id: "turn-1".into(),
+                stdout: String::new(),
+                stderr: String::new(),
+                success: true,
+                changes,
+            }),
+        });
+
+        proc.handle_codex_event(Event {
+            id: "turn-complete".into(),
+            msg: EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: "turn-1".to_string(),
+                last_agent_message: None,
+            }),
+        });
+
+        let events = drain_history_cell_strings(&mut rx, width);
+        pretty_assertions::assert_eq!(events, vec![vec!["• Edited file.txt (+1 -1)".to_string()]]);
     }
 
     #[test]

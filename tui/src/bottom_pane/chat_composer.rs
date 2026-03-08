@@ -2101,7 +2101,6 @@ impl Renderable for ChatComposer {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
-    use pretty_assertions::assert_ne;
 
     use crate::app_event::AppEvent;
     use crate::app_event_sender::AppEventSender;
@@ -2333,10 +2332,8 @@ mod tests {
 
         let (expected_result, expected_redraw) =
             regular.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-        let (actual_result, actual_redraw) = super_modified.handle_key_event(KeyEvent::new(
-            KeyCode::Down,
-            KeyModifiers::SUPER,
-        ));
+        let (actual_result, actual_redraw) =
+            super_modified.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::SUPER));
 
         assert_eq!(actual_result, expected_result);
         assert_eq!(actual_redraw, expected_redraw);
@@ -2373,10 +2370,8 @@ mod tests {
 
         let (expected_result, expected_redraw) =
             regular.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-        let (actual_result, actual_redraw) = super_modified.handle_key_event(KeyEvent::new(
-            KeyCode::Down,
-            KeyModifiers::SUPER,
-        ));
+        let (actual_result, actual_redraw) =
+            super_modified.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::SUPER));
 
         assert_eq!(actual_result, expected_result);
         assert_eq!(actual_redraw, expected_redraw);
@@ -2462,10 +2457,8 @@ mod tests {
 
         let (expected_result, expected_redraw) =
             regular.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-        let (actual_result, actual_redraw) = super_modified.handle_key_event(KeyEvent::new(
-            KeyCode::Down,
-            KeyModifiers::SUPER,
-        ));
+        let (actual_result, actual_redraw) =
+            super_modified.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::SUPER));
 
         assert_eq!(actual_result, expected_result);
         assert_eq!(actual_redraw, expected_redraw);
@@ -2478,7 +2471,10 @@ mod tests {
             panic!("expected ActivePopup::File");
         };
         assert_eq!(
-            actual_popup.selected_match().expect("selected match").to_string(),
+            actual_popup
+                .selected_match()
+                .expect("selected match")
+                .to_string(),
             expected_popup
                 .selected_match()
                 .expect("selected match")
@@ -2551,10 +2547,8 @@ mod tests {
 
         let (expected_result, expected_redraw) =
             regular.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-        let (actual_result, actual_redraw) = super_modified.handle_key_event(KeyEvent::new(
-            KeyCode::Down,
-            KeyModifiers::SUPER,
-        ));
+        let (actual_result, actual_redraw) =
+            super_modified.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::SUPER));
 
         assert_eq!(actual_result, expected_result);
         assert_eq!(actual_redraw, expected_redraw);

@@ -786,6 +786,54 @@ fast_mode = false
 
     #[test]
     #[serial]
+    fn runtime_profile_override_combines_with_explicit_model_override() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let _env = EnvVarGuard::set("CODEX_HOME", codex_home.path());
+
+        write_config(
+            &codex_home.path().join("config.toml"),
+            r#"
+model = "gpt-5.2"
+profile = "default"
+
+[features]
+fast_mode = false
+
+[profiles.default]
+model = "gpt-5.2"
+model_reasoning_effort = "low"
+service_tier = "flex"
+
+[profiles.fast]
+model = "gpt-5.3"
+model_reasoning_effort = "high"
+service_tier = "fast"
+
+[profiles.fast.features]
+fast_mode = true
+"#,
+        );
+
+        let cwd = tempfile::tempdir().expect("cwd");
+        let resolved = resolve_codex_model_config_with_runtime_overrides(
+            cwd.path(),
+            Some("gpt-5.4"),
+            &["profile=\"fast\"".to_string()],
+        )
+        .expect("resolve");
+
+        assert_eq!(
+            resolved,
+            ResolvedCodexModelConfig {
+                model: "gpt-5.4".to_string(),
+                reasoning_effort: Some(ReasoningEffort::High),
+                is_fast: true,
+            }
+        );
+    }
+
+    #[test]
+    #[serial]
     fn runtime_project_root_markers_override_affects_layer_discovery() {
         let codex_home = tempfile::tempdir().expect("tempdir");
         let _env = EnvVarGuard::set("CODEX_HOME", codex_home.path());

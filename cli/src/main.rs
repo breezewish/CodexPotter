@@ -231,6 +231,12 @@ async fn main() -> anyhow::Result<()> {
         .to_string();
 
     let mut ui = codex_tui::CodexPotterTui::new()?;
+    ui.set_startup_banner_codex_overrides(
+        &workdir,
+        cli.upstream_cli_args.model.clone(),
+        cli.upstream_cli_args.effective_runtime_config_overrides(),
+    )
+    .context("resolve startup banner Codex model config")?;
 
     ui.set_check_for_update_on_startup(check_for_update_on_startup);
     if let Some(update_action) = ui.prompt_update_if_needed().await? {

@@ -1,6 +1,7 @@
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::Op;
 use std::collections::VecDeque;
+use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
@@ -38,6 +39,7 @@ pub struct CodexPotterTui {
     composer_draft: Option<crate::bottom_pane::ChatComposerDraft>,
     check_for_update_on_startup: bool,
     startup_warnings: Vec<String>,
+    startup_codex_model_config: Option<crate::codex_config::ResolvedCodexModelConfig>,
     verbosity: Verbosity,
     needs_startup_verbosity_prompt: bool,
 }
@@ -72,6 +74,7 @@ impl CodexPotterTui {
             composer_draft: None,
             check_for_update_on_startup: true,
             startup_warnings,
+            startup_codex_model_config: None,
             verbosity,
             needs_startup_verbosity_prompt,
         })
@@ -87,6 +90,28 @@ impl CodexPotterTui {
     /// and update-available banner.
     pub fn set_check_for_update_on_startup(&mut self, enabled: bool) {
         self.check_for_update_on_startup = enabled;
+    }
+
+    /// Pre-resolve the startup banner's Codex model metadata from the current runtime overrides.
+    ///
+    /// `model_override` should match the explicit `--model` passed to upstream `thread/*`, while
+    /// `runtime_config_overrides` should match the effective runtime `--config key=value`
+    /// overrides after translating higher-level flags like `--profile`, `--search`, and feature
+    /// toggles.
+    pub fn set_startup_banner_codex_overrides(
+        &mut self,
+        cwd: &Path,
+        model_override: Option<String>,
+        runtime_config_overrides: Vec<String>,
+    ) -> std::io::Result<()> {
+        self.startup_codex_model_config = Some(
+            crate::codex_config::resolve_codex_model_config_with_runtime_overrides(
+                cwd,
+                model_override.as_deref(),
+                &runtime_config_overrides,
+            )?,
+        );
+        Ok(())
     }
 
     /// Show the "update available" modal, if applicable.
@@ -195,10 +220,13 @@ impl CodexPotterTui {
         let startup_warnings = std::mem::take(&mut self.startup_warnings);
         crate::app_server_render::prompt_user_with_tui(
             &mut self.tui,
-            show_startup_banner,
-            self.check_for_update_on_startup,
-            startup_warnings,
-            composer_draft,
+            crate::app_server_render::PromptScreenOptions {
+                show_startup_banner,
+                check_for_update_on_startup: self.check_for_update_on_startup,
+                startup_warnings,
+                startup_codex_model_config: self.startup_codex_model_config.clone(),
+                composer_draft,
+            },
             &mut self.verbosity,
             prompt_footer,
         )

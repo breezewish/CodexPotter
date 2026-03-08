@@ -48,7 +48,15 @@ pub struct ResolvedCodexModelConfig {
 
 /// Resolve the effective model metadata used by the startup banner from layered Codex config.
 pub fn resolve_codex_model_config(cwd: &Path) -> io::Result<ResolvedCodexModelConfig> {
-    let raw = load_codex_config(cwd)?;
+    resolve_codex_model_config_with_runtime_overrides(cwd, None, &[])
+}
+
+pub(crate) fn resolve_codex_model_config_with_runtime_overrides(
+    cwd: &Path,
+    model_override: Option<&str>,
+    runtime_config_overrides: &[String],
+) -> io::Result<ResolvedCodexModelConfig> {
+    let raw = load_codex_config(cwd, runtime_config_overrides)?;
 
     let profile_config = match &raw.profile {
         Some(name) => raw.profiles.get(name).cloned().ok_or_else(|| {
@@ -60,8 +68,9 @@ pub fn resolve_codex_model_config(cwd: &Path) -> io::Result<ResolvedCodexModelCo
         None => CodexProfileModelConfig::default(),
     };
 
-    let model = profile_config
-        .model
+    let model = model_override
+        .map(ToOwned::to_owned)
+        .or(profile_config.model)
         .or(raw.model)
         .unwrap_or_else(|| DEFAULT_FALLBACK_MODEL.to_string());
     let reasoning_effort = profile_config.reasoning_effort.or(raw.reasoning_effort);
@@ -79,7 +88,7 @@ pub fn resolve_codex_model_config(cwd: &Path) -> io::Result<ResolvedCodexModelCo
 }
 
 pub fn resolve_codex_tui_theme(cwd: &Path) -> io::Result<Option<String>> {
-    let raw = load_codex_config(cwd)?;
+    let raw = load_codex_config(cwd, &[])?;
     Ok(raw.tui_theme)
 }
 
@@ -115,22 +124,30 @@ pub fn persist_codex_tui_theme(codex_home: &Path, name: &str) -> io::Result<()> 
 
 const DEFAULT_FALLBACK_MODEL: &str = "gpt-5.2-codex";
 
-fn load_codex_config(cwd: &Path) -> io::Result<CodexConfig> {
+fn load_codex_config(cwd: &Path, runtime_config_overrides: &[String]) -> io::Result<CodexConfig> {
     let codex_home = find_codex_home()?;
-    let mut config = CodexConfig::default();
+    let mut base_config = CodexConfig::default();
 
     // Match codex config layering order (subset):
     // - system: /etc/codex/config.toml
     // - user:   $CODEX_HOME/config.toml (default ~/.codex/config.toml)
     // - project layers: ./.../.codex/config.toml from project root to cwd
-    apply_config_layer_from_file(&mut config, &default_system_config_path())?;
-    apply_config_layer_from_file(&mut config, &codex_home.join("config.toml"))?;
+    apply_config_layer_from_file(&mut base_config, &default_system_config_path())?;
+    apply_config_layer_from_file(&mut base_config, &codex_home.join("config.toml"))?;
 
-    let project_root_markers = config
+    let mut discovery_config = base_config.clone();
+    // Runtime overrides can change `project_root_markers`, so they must participate in project
+    // root discovery before we know which `.codex/config.toml` layers to load. We still reapply
+    // them after loading project layers because runtime overrides have the highest precedence.
+    apply_runtime_config_overrides(&mut discovery_config, runtime_config_overrides)?;
+
+    let project_root_markers = discovery_config
         .project_root_markers
         .clone()
         .unwrap_or_else(default_project_root_markers);
     let project_root = find_project_root(cwd, &project_root_markers)?;
+
+    let mut config = base_config;
     for dir in project_dirs_between(&project_root, cwd) {
         let dot_codex = dir.join(".codex");
         if !dot_codex.is_dir() {
@@ -138,6 +155,8 @@ fn load_codex_config(cwd: &Path) -> io::Result<CodexConfig> {
         }
         apply_config_layer_from_file(&mut config, &dot_codex.join("config.toml"))?;
     }
+
+    apply_runtime_config_overrides(&mut config, runtime_config_overrides)?;
 
     Ok(config)
 }
@@ -349,6 +368,48 @@ fn apply_config_layer_from_doc(config: &mut CodexConfig, doc: &DocumentMut) -> i
     Ok(())
 }
 
+fn apply_runtime_config_overrides(
+    config: &mut CodexConfig,
+    runtime_config_overrides: &[String],
+) -> io::Result<()> {
+    for override_kv in runtime_config_overrides {
+        let doc = parse_runtime_config_override(override_kv)?;
+        apply_config_layer_from_doc(config, &doc)?;
+    }
+
+    Ok(())
+}
+
+fn parse_runtime_config_override(override_kv: &str) -> io::Result<DocumentMut> {
+    let Some((key, raw_value)) = override_kv.split_once('=') else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("config override `{override_kv}` must be in key=value form"),
+        ));
+    };
+    let key = key.trim();
+    if key.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("config override `{override_kv}` must have a non-empty key"),
+        ));
+    }
+
+    let raw_value = raw_value.trim();
+    let override_source = format!("{key} = {raw_value}");
+    if let Ok(doc) = override_source.parse::<DocumentMut>() {
+        return Ok(doc);
+    }
+
+    let fallback_source = format!("{key} = {}", toml_string_literal(raw_value));
+    fallback_source.parse::<DocumentMut>().map_err(|err| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("config override `{override_kv}` is invalid: {err}"),
+        )
+    })
+}
+
 fn read_string(item: &TomlItem, field: &str) -> io::Result<String> {
     item.as_value()
         .and_then(|value| value.as_str())
@@ -501,6 +562,26 @@ fn parse_service_tier(value: &str) -> Option<CodexServiceTier> {
         "flex" => Some(CodexServiceTier::Flex),
         _ => None,
     }
+}
+
+fn toml_string_literal(input: &str) -> String {
+    let mut out = String::with_capacity(input.len() + 2);
+    out.push('"');
+    for ch in input.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\u{08}' => out.push_str("\\b"),
+            '\n' => out.push_str("\\n"),
+            '\u{0C}' => out.push_str("\\f"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            ch if ch.is_control() => out.push_str(&format!("\\u{:04X}", ch as u32)),
+            ch => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
 }
 
 #[cfg(test)]
@@ -661,6 +742,82 @@ fast_mode = true
                 is_fast: true,
             }
         );
+    }
+
+    #[test]
+    #[serial]
+    fn runtime_overrides_replace_model_reasoning_and_fast_state() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let _env = EnvVarGuard::set("CODEX_HOME", codex_home.path());
+
+        write_config(
+            &codex_home.path().join("config.toml"),
+            r#"
+model = "gpt-5.2"
+model_reasoning_effort = "low"
+service_tier = "flex"
+
+[features]
+fast_mode = false
+"#,
+        );
+
+        let cwd = tempfile::tempdir().expect("cwd");
+        let resolved = resolve_codex_model_config_with_runtime_overrides(
+            cwd.path(),
+            Some("gpt-5.4"),
+            &[
+                "model_reasoning_effort=high".to_string(),
+                "service_tier=fast".to_string(),
+                "features.fast_mode=true".to_string(),
+            ],
+        )
+        .expect("resolve");
+
+        assert_eq!(
+            resolved,
+            ResolvedCodexModelConfig {
+                model: "gpt-5.4".to_string(),
+                reasoning_effort: Some(ReasoningEffort::High),
+                is_fast: true,
+            }
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn runtime_project_root_markers_override_affects_layer_discovery() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let _env = EnvVarGuard::set("CODEX_HOME", codex_home.path());
+
+        write_config(
+            &codex_home.path().join("config.toml"),
+            r#"
+model = "gpt-5.2"
+"#,
+        );
+
+        let repo = tempfile::tempdir().expect("repo");
+        std::fs::write(repo.path().join("MARKER"), "").expect("write marker");
+        std::fs::create_dir_all(repo.path().join(".codex")).expect("mkdir .codex");
+        write_config(
+            &repo.path().join(".codex").join("config.toml"),
+            r#"
+model = "gpt-5.4"
+"#,
+        );
+
+        let cwd = repo.path().join("subdir");
+        std::fs::create_dir_all(&cwd).expect("mkdir subdir");
+
+        let resolved = resolve_codex_model_config_with_runtime_overrides(
+            &cwd,
+            None,
+            &["project_root_markers=[\"MARKER\"]".to_string()],
+        )
+        .expect("resolve");
+
+        assert_eq!(resolved.model, "gpt-5.4");
     }
 
     #[test]

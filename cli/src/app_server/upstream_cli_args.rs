@@ -151,6 +151,28 @@ impl UpstreamCodexCliArgs {
 
         out
     }
+
+    pub(crate) fn effective_runtime_config_overrides(&self) -> Vec<String> {
+        let mut out = self.config_overrides.clone();
+
+        if let Some(profile) = &self.profile {
+            out.push(format!("profile={}", toml_string_literal(profile)));
+        }
+
+        if self.web_search {
+            out.push("web_search=\"live\"".to_string());
+        }
+
+        for feature in &self.enable_features {
+            out.push(format!("features.{feature}=true"));
+        }
+
+        for feature in &self.disable_features {
+            out.push(format!("features.{feature}=false"));
+        }
+
+        out
+    }
 }
 
 fn toml_string_literal(input: &str) -> String {
@@ -257,5 +279,31 @@ mod tests {
         assert_eq!(toml_string_literal("a\u{1F}b"), "\"a\\u001Fb\"");
         assert_eq!(toml_string_literal("a\u{7F}b"), "\"a\\u007Fb\"");
         assert_eq!(toml_string_literal("a\u{85}b"), "\"a\\u0085b\"");
+    }
+
+    #[test]
+    fn effective_runtime_config_overrides_fold_high_level_flags() {
+        let args = UpstreamCodexCliArgs {
+            config_overrides: vec!["foo=1".to_string()],
+            enable_features: vec!["fast_mode".to_string()],
+            disable_features: vec!["web_search_request".to_string()],
+            model: Some("o3".to_string()),
+            profile: Some("my-profile".to_string()),
+            web_search: true,
+        };
+
+        assert_eq!(
+            args.effective_runtime_config_overrides(),
+            vec![
+                "foo=1",
+                "profile=\"my-profile\"",
+                "web_search=\"live\"",
+                "features.fast_mode=true",
+                "features.web_search_request=false",
+            ]
+            .into_iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+        );
     }
 }

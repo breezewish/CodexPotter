@@ -108,6 +108,14 @@ fn new_default_bottom_pane(
     })
 }
 
+pub(crate) struct PromptScreenOptions {
+    pub(crate) show_startup_banner: bool,
+    pub(crate) check_for_update_on_startup: bool,
+    pub(crate) startup_warnings: Vec<String>,
+    pub(crate) startup_codex_model_config: Option<crate::codex_config::ResolvedCodexModelConfig>,
+    pub(crate) composer_draft: Option<ChatComposerDraft>,
+}
+
 /// Prompt the user for a new task using the bottom-pane composer.
 ///
 /// Returns `Ok(Some(prompt))` when the user submits a prompt. Returns `Ok(None)` when the prompt
@@ -115,13 +123,18 @@ fn new_default_bottom_pane(
 /// stream ends unexpectedly.
 pub async fn prompt_user_with_tui(
     tui: &mut Tui,
-    show_startup_banner: bool,
-    check_for_update_on_startup: bool,
-    startup_warnings: Vec<String>,
-    composer_draft: Option<ChatComposerDraft>,
+    options: PromptScreenOptions,
     verbosity: &mut Verbosity,
     prompt_footer: PromptFooterContext,
 ) -> anyhow::Result<Option<String>> {
+    let PromptScreenOptions {
+        show_startup_banner,
+        check_for_update_on_startup,
+        startup_warnings,
+        startup_codex_model_config,
+        composer_draft,
+    } = options;
+
     let (app_event_tx_raw, mut app_event_rx) = unbounded_channel::<AppEvent>();
     let app_event_tx = AppEventSender::new(app_event_tx_raw);
 
@@ -142,7 +155,10 @@ pub async fn prompt_user_with_tui(
     let mut should_pad_prompt_viewport = !show_startup_banner;
     if show_startup_banner {
         let width = tui.terminal.last_known_screen_size.width.max(1);
-        let codex_model = crate::codex_config::resolve_codex_model_config(&file_search_dir)?;
+        let codex_model = match startup_codex_model_config {
+            Some(codex_model) => codex_model,
+            None => crate::codex_config::resolve_codex_model_config(&file_search_dir)?,
+        };
         let mut model_label = match codex_model.reasoning_effort {
             Some(effort) => format!("{} {effort}", codex_model.model),
             None => codex_model.model,

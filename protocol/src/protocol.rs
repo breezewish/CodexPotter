@@ -218,6 +218,9 @@ pub enum EventMsg {
     /// Notification that the server is about to execute a command.
     ExecCommandBegin(ExecCommandBeginEvent),
 
+    /// Terminal interaction for an in-progress command (stdin sent and stdout observed).
+    TerminalInteraction(TerminalInteractionEvent),
+
     ExecCommandEnd(ExecCommandEndEvent),
 
     /// Notification that the agent attached a local image via the view_image tool.
@@ -234,6 +237,8 @@ pub enum EventMsg {
     /// Notification advising the user that something they are using has been
     /// deprecated and should be phased out.
     DeprecationNotice(DeprecationNoticeEvent),
+
+    BackgroundEvent(BackgroundEventEvent),
 
     /// Notification that the agent is about to apply a code patch.
     PatchApplyBegin(PatchApplyBeginEvent),
@@ -725,6 +730,21 @@ pub struct ViewImageToolCallEvent {
     pub path: PathBuf,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct TerminalInteractionEvent {
+    /// Identifier for the ExecCommandBegin that produced this interaction.
+    pub call_id: String,
+    /// Process id associated with the running command.
+    pub process_id: String,
+    /// Stdin sent to the running session.
+    pub stdin: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct BackgroundEventEvent {
+    pub message: String,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DeprecationNoticeEvent {
     /// Concise summary of what is deprecated.
@@ -1204,6 +1224,54 @@ mod tests {
         }))?;
 
         assert!(matches!(event.msg, EventMsg::Unknown));
+        Ok(())
+    }
+
+    #[test]
+    fn terminal_interaction_event_deserializes() -> Result<()> {
+        let event: Event = serde_json::from_value(json!({
+            "id": "1234",
+            "msg": {
+                "type": "terminal_interaction",
+                "call_id": "call-1",
+                "process_id": "proc-1",
+                "stdin": ""
+            }
+        }))?;
+
+        match event.msg {
+            EventMsg::TerminalInteraction(TerminalInteractionEvent {
+                call_id,
+                process_id,
+                stdin,
+            }) => {
+                assert_eq!(call_id, "call-1");
+                assert_eq!(process_id, "proc-1");
+                assert_eq!(stdin, "");
+            }
+            other => panic!("expected terminal interaction event, got {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn background_event_deserializes() -> Result<()> {
+        let event: Event = serde_json::from_value(json!({
+            "id": "1234",
+            "msg": {
+                "type": "background_event",
+                "message": "Waiting for `vim`"
+            }
+        }))?;
+
+        match event.msg {
+            EventMsg::BackgroundEvent(BackgroundEventEvent { message }) => {
+                assert_eq!(message, "Waiting for `vim`");
+            }
+            other => panic!("expected background event, got {other:?}"),
+        }
+
         Ok(())
     }
 

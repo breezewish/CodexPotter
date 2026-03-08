@@ -36,6 +36,7 @@ use crate::bottom_pane::PromptFooterOverride;
 use crate::exec_cell::CommandOutput;
 use crate::exec_cell::ExecCell;
 use crate::exec_cell::new_active_exec_command;
+use crate::exec_command::strip_bash_lc_and_escape;
 use crate::external_editor_integration;
 use crate::file_search::FileSearchManager;
 use crate::history_cell;
@@ -1055,17 +1056,20 @@ impl AppServerEventProcessor {
 
 struct ReasoningStatusTracker {
     buffer: String,
+    current_header: Option<String>,
 }
 
 impl ReasoningStatusTracker {
     fn new() -> Self {
         Self {
             buffer: String::new(),
+            current_header: None,
         }
     }
 
     fn reset(&mut self) {
         self.buffer.clear();
+        self.current_header = None;
     }
 
     fn on_section_break(&mut self) {
@@ -1078,7 +1082,15 @@ impl ReasoningStatusTracker {
 
     fn on_delta(&mut self, delta: &str) -> Option<String> {
         self.buffer.push_str(delta);
-        extract_first_bold(&self.buffer)
+        let header = extract_first_bold(&self.buffer);
+        if let Some(header) = &header {
+            self.current_header = Some(header.clone());
+        }
+        header
+    }
+
+    fn current_header(&self) -> Option<String> {
+        self.current_header.clone()
     }
 }
 
@@ -1099,12 +1111,20 @@ struct RenderAppState {
     file_search: FileSearchManager,
     queued_user_messages: VecDeque<String>,
     reasoning_status: ReasoningStatusTracker,
+    unified_exec_commands: HashMap<String, String>,
+    unified_exec_wait: Option<UnifiedExecWaitStatus>,
     stream_error_status_header: Option<String>,
     potter_stream_recovery_retry_cell: Option<PotterStreamRecoveryRetryCell>,
     commit_anim_running: Arc<AtomicBool>,
     has_emitted_history_lines: bool,
     exit_after_next_draw: bool,
     exit_reason: ExitReason,
+}
+
+#[derive(Debug, Clone)]
+struct UnifiedExecWaitStatus {
+    process_id: String,
+    previous_header: String,
 }
 
 impl RenderAppState {
@@ -1128,6 +1148,8 @@ impl RenderAppState {
             file_search,
             queued_user_messages,
             reasoning_status: ReasoningStatusTracker::new(),
+            unified_exec_commands: HashMap::new(),
+            unified_exec_wait: None,
             stream_error_status_header: None,
             potter_stream_recovery_retry_cell: None,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
@@ -1828,23 +1850,48 @@ impl RenderAppState {
         }
 
         match &event.msg {
+            EventMsg::ExecCommandBegin(ev) => self.record_exec_command(ev),
+            EventMsg::TerminalInteraction(ev) => {
+                self.show_unified_exec_wait(ev);
+                return Ok(());
+            }
+            EventMsg::ExecCommandEnd(ev) => self.handle_exec_command_end_status(ev),
+            EventMsg::BackgroundEvent(ev) => {
+                self.restore_status_after_unified_exec_wait();
+                self.bottom_pane.update_status_header(ev.message.clone());
+                return Ok(());
+            }
+            EventMsg::TurnComplete(_)
+            | EventMsg::TurnAborted(_)
+            | EventMsg::PotterRoundFinished { .. } => {
+                self.clear_unified_exec_state();
+            }
+            _ => {}
+        }
+
+        match &event.msg {
             EventMsg::PotterRoundStarted { current, total } => {
                 self.bottom_pane
                     .set_status_header_prefix(Some(format!("Round {current}/{total}")));
             }
             EventMsg::TurnStarted(_) => {
                 self.reasoning_status.reset();
+                self.unified_exec_wait = None;
                 self.bottom_pane
                     .update_status_header(String::from("Working"));
             }
             EventMsg::AgentReasoningDelta(ev) => {
-                if let Some(header) = self.reasoning_status.on_delta(&ev.delta) {
+                if let Some(header) = self.reasoning_status.on_delta(&ev.delta)
+                    && self.unified_exec_wait.is_none()
+                {
                     self.bottom_pane.update_status_header(header);
                 }
                 return Ok(());
             }
             EventMsg::AgentReasoningRawContentDelta(ev) => {
-                if let Some(header) = self.reasoning_status.on_delta(&ev.delta) {
+                if let Some(header) = self.reasoning_status.on_delta(&ev.delta)
+                    && self.unified_exec_wait.is_none()
+                {
                     self.bottom_pane.update_status_header(header);
                 }
                 return Ok(());
@@ -1858,7 +1905,9 @@ impl RenderAppState {
                 return Ok(());
             }
             EventMsg::AgentReasoningRawContent(ev) => {
-                if let Some(header) = self.reasoning_status.on_delta(&ev.text) {
+                if let Some(header) = self.reasoning_status.on_delta(&ev.text)
+                    && self.unified_exec_wait.is_none()
+                {
                     self.bottom_pane.update_status_header(header);
                 }
                 self.reasoning_status.on_final();
@@ -1926,6 +1975,76 @@ impl RenderAppState {
         }
 
         Ok(())
+    }
+
+    fn record_exec_command(&mut self, ev: &codex_protocol::protocol::ExecCommandBeginEvent) {
+        if ev.source != codex_protocol::protocol::ExecCommandSource::UnifiedExecStartup {
+            return;
+        }
+        let Some(process_id) = &ev.process_id else {
+            return;
+        };
+
+        self.unified_exec_commands
+            .insert(process_id.clone(), strip_bash_lc_and_escape(&ev.command));
+    }
+
+    fn show_unified_exec_wait(&mut self, ev: &codex_protocol::protocol::TerminalInteractionEvent) {
+        if !ev.stdin.is_empty() {
+            return;
+        }
+
+        let previous_header = self
+            .unified_exec_wait
+            .as_ref()
+            .map(|wait| wait.previous_header.clone())
+            .unwrap_or_else(|| self.bottom_pane.status_header().to_string());
+        self.unified_exec_wait = Some(UnifiedExecWaitStatus {
+            process_id: ev.process_id.clone(),
+            previous_header,
+        });
+        self.bottom_pane.update_status_header_with_details(
+            String::from("Waiting for background terminal"),
+            self.unified_exec_commands.get(&ev.process_id).cloned(),
+        );
+    }
+
+    fn restore_status_after_unified_exec_wait(&mut self) {
+        let Some(wait) = self.unified_exec_wait.take() else {
+            return;
+        };
+        let header = self
+            .reasoning_status
+            .current_header()
+            .unwrap_or(wait.previous_header);
+        let header = if header.is_empty() {
+            String::from("Working")
+        } else {
+            header
+        };
+        self.bottom_pane.update_status_header(header);
+    }
+
+    fn clear_unified_exec_state(&mut self) {
+        self.restore_status_after_unified_exec_wait();
+        self.unified_exec_commands.clear();
+    }
+
+    fn handle_exec_command_end_status(
+        &mut self,
+        ev: &codex_protocol::protocol::ExecCommandEndEvent,
+    ) {
+        let Some(process_id) = &ev.process_id else {
+            return;
+        };
+        if self
+            .unified_exec_wait
+            .as_ref()
+            .is_some_and(|wait| wait.process_id == *process_id)
+        {
+            self.restore_status_after_unified_exec_wait();
+        }
+        self.unified_exec_commands.remove(process_id);
     }
 
     fn update_bottom_pane_context_window(&mut self) {
@@ -1999,9 +2118,12 @@ mod tests {
     use codex_protocol::parse_command::ParsedCommand;
     use codex_protocol::protocol::AgentMessageDeltaEvent;
     use codex_protocol::protocol::AgentMessageEvent;
+    use codex_protocol::protocol::AgentReasoningDeltaEvent;
+    use codex_protocol::protocol::BackgroundEventEvent;
     use codex_protocol::protocol::CodexErrorInfo;
     use codex_protocol::protocol::ContextCompactedEvent;
     use codex_protocol::protocol::ErrorEvent;
+    use codex_protocol::protocol::ExecCommandBeginEvent;
     use codex_protocol::protocol::ExecCommandEndEvent;
     use codex_protocol::protocol::ExecCommandSource;
     use codex_protocol::protocol::PatchApplyBeginEvent;
@@ -2009,6 +2131,7 @@ mod tests {
     use codex_protocol::protocol::PlanDeltaEvent;
     use codex_protocol::protocol::SessionConfiguredEvent;
     use codex_protocol::protocol::StreamErrorEvent;
+    use codex_protocol::protocol::TerminalInteractionEvent;
     use codex_protocol::protocol::TokenCountEvent;
     use codex_protocol::protocol::TokenUsageInfo;
     use codex_protocol::protocol::TurnAbortReason;
@@ -2392,6 +2515,182 @@ mod tests {
             op_rx.try_recv().is_err(),
             "expected no Continue op for stream recovery update"
         );
+    }
+
+    #[test]
+    fn background_event_updates_status_header_without_history_cells() {
+        let width: u16 = 80;
+
+        let (tx_raw, mut rx_app) = unbounded_channel::<AppEvent>();
+        let app_event_tx = AppEventSender::new(tx_raw);
+
+        let processor = AppServerEventProcessor::new(app_event_tx.clone(), Verbosity::default());
+        let (op_tx, _op_rx) = unbounded_channel::<Op>();
+        let mut bottom_pane = BottomPane::new(BottomPaneParams {
+            frame_requester: crate::tui::FrameRequester::test_dummy(),
+            enhanced_keys_supported: false,
+            app_event_tx: app_event_tx.clone(),
+            animations_enabled: false,
+            placeholder_text: "Assign new task to CodexPotter".to_string(),
+            disable_paste_burst: false,
+        });
+        bottom_pane.set_task_running(true);
+        let file_search = FileSearchManager::new(std::env::temp_dir(), app_event_tx.clone());
+        let mut app = RenderAppState::new(
+            processor,
+            app_event_tx,
+            Some(op_tx),
+            bottom_pane,
+            crate::prompt_history_store::PromptHistoryStore::new(),
+            file_search,
+            VecDeque::new(),
+        );
+
+        app.handle_codex_event(
+            crate::tui::FrameRequester::test_dummy(),
+            Event {
+                id: "bg-1".into(),
+                msg: EventMsg::BackgroundEvent(BackgroundEventEvent {
+                    message: "Waiting for `vim`".to_string(),
+                }),
+            },
+        )
+        .expect("handle background event");
+
+        let status = app.bottom_pane.status_widget().expect("status indicator");
+        pretty_assertions::assert_eq!(status.header(), "Waiting for `vim`");
+        pretty_assertions::assert_eq!(status.details(), None);
+
+        let cells = drain_history_cell_strings(&mut rx_app, width);
+        assert!(
+            cells.is_empty(),
+            "expected no history cells; got: {cells:?}"
+        );
+    }
+
+    #[test]
+    fn terminal_interaction_wait_updates_status_and_restores_reasoning_header_on_exec_end() {
+        let width: u16 = 80;
+
+        let (tx_raw, mut rx_app) = unbounded_channel::<AppEvent>();
+        let app_event_tx = AppEventSender::new(tx_raw);
+
+        let processor = AppServerEventProcessor::new(app_event_tx.clone(), Verbosity::default());
+        let (op_tx, _op_rx) = unbounded_channel::<Op>();
+        let mut bottom_pane = BottomPane::new(BottomPaneParams {
+            frame_requester: crate::tui::FrameRequester::test_dummy(),
+            enhanced_keys_supported: false,
+            app_event_tx: app_event_tx.clone(),
+            animations_enabled: false,
+            placeholder_text: "Assign new task to CodexPotter".to_string(),
+            disable_paste_burst: false,
+        });
+        bottom_pane.set_task_running(true);
+        let file_search = FileSearchManager::new(std::env::temp_dir(), app_event_tx.clone());
+        let mut app = RenderAppState::new(
+            processor,
+            app_event_tx,
+            Some(op_tx),
+            bottom_pane,
+            crate::prompt_history_store::PromptHistoryStore::new(),
+            file_search,
+            VecDeque::new(),
+        );
+
+        app.handle_codex_event(
+            crate::tui::FrameRequester::test_dummy(),
+            Event {
+                id: "turn-1".into(),
+                msg: EventMsg::TurnStarted(TurnStartedEvent {
+                    turn_id: "turn-1".to_string(),
+                    model_context_window: None,
+                }),
+            },
+        )
+        .expect("handle turn start");
+        app.handle_codex_event(
+            crate::tui::FrameRequester::test_dummy(),
+            Event {
+                id: "reasoning-1".into(),
+                msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+                    delta: "**Inspecting".to_string(),
+                }),
+            },
+        )
+        .expect("handle reasoning delta start");
+        app.handle_codex_event(
+            crate::tui::FrameRequester::test_dummy(),
+            Event {
+                id: "reasoning-2".into(),
+                msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+                    delta: " for background shell**".to_string(),
+                }),
+            },
+        )
+        .expect("handle reasoning delta end");
+        app.handle_codex_event(
+            crate::tui::FrameRequester::test_dummy(),
+            Event {
+                id: "exec-begin".into(),
+                msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+                    call_id: "call-1".to_string(),
+                    process_id: Some("proc-1".to_string()),
+                    turn_id: "turn-1".to_string(),
+                    command: vec!["bash".to_string(), "-lc".to_string(), "sleep 5".to_string()],
+                    cwd: PathBuf::from("project"),
+                    parsed_cmd: Vec::new(),
+                    source: ExecCommandSource::UnifiedExecStartup,
+                    interaction_input: None,
+                }),
+            },
+        )
+        .expect("handle exec begin");
+        app.handle_codex_event(
+            crate::tui::FrameRequester::test_dummy(),
+            Event {
+                id: "terminal-1".into(),
+                msg: EventMsg::TerminalInteraction(TerminalInteractionEvent {
+                    call_id: "call-1".to_string(),
+                    process_id: "proc-1".to_string(),
+                    stdin: String::new(),
+                }),
+            },
+        )
+        .expect("handle terminal interaction");
+
+        let status = app.bottom_pane.status_widget().expect("status indicator");
+        pretty_assertions::assert_eq!(status.header(), "Waiting for background terminal");
+        pretty_assertions::assert_eq!(status.details(), Some("Sleep 5"));
+
+        app.handle_codex_event(
+            crate::tui::FrameRequester::test_dummy(),
+            Event {
+                id: "exec-end".into(),
+                msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+                    call_id: "call-1".to_string(),
+                    process_id: Some("proc-1".to_string()),
+                    turn_id: "turn-1".to_string(),
+                    command: vec!["bash".to_string(), "-lc".to_string(), "sleep 5".to_string()],
+                    cwd: PathBuf::from("project"),
+                    parsed_cmd: Vec::new(),
+                    source: ExecCommandSource::UnifiedExecStartup,
+                    interaction_input: None,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    aggregated_output: String::new(),
+                    exit_code: 0,
+                    duration: Duration::from_secs(1),
+                    formatted_output: String::new(),
+                }),
+            },
+        )
+        .expect("handle exec end");
+
+        let status = app.bottom_pane.status_widget().expect("status indicator");
+        pretty_assertions::assert_eq!(status.header(), "Inspecting for background shell");
+        pretty_assertions::assert_eq!(status.details(), None);
+
+        let _cells = drain_history_cell_strings(&mut rx_app, width);
     }
 
     #[test]

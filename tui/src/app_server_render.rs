@@ -108,12 +108,13 @@ fn new_default_bottom_pane(
     })
 }
 
-pub(crate) struct PromptScreenOptions {
-    pub(crate) show_startup_banner: bool,
-    pub(crate) check_for_update_on_startup: bool,
-    pub(crate) startup_warnings: Vec<String>,
-    pub(crate) startup_codex_model_config: Option<crate::codex_config::ResolvedCodexModelConfig>,
-    pub(crate) composer_draft: Option<ChatComposerDraft>,
+/// Parameters for rendering the prompt screen before the first user submission.
+pub struct PromptScreenOptions {
+    pub show_startup_banner: bool,
+    pub check_for_update_on_startup: bool,
+    pub startup_warnings: Vec<String>,
+    pub startup_codex_model_config: Option<crate::codex_config::ResolvedCodexModelConfig>,
+    pub composer_draft: Option<ChatComposerDraft>,
 }
 
 /// Prompt the user for a new task using the bottom-pane composer.

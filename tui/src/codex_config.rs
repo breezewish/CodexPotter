@@ -51,7 +51,13 @@ pub fn resolve_codex_model_config(cwd: &Path) -> io::Result<ResolvedCodexModelCo
     resolve_codex_model_config_with_runtime_overrides(cwd, None, &[])
 }
 
-pub(crate) fn resolve_codex_model_config_with_runtime_overrides(
+/// Resolve the startup banner model metadata after applying runtime config overrides.
+///
+/// `model_override` must match the explicit model passed via `thread/start` or
+/// `thread/resume`, while `runtime_config_overrides` must match the effective runtime
+/// `key=value` overrides after folding higher-level CLI flags like `--profile`, `--search`,
+/// `--enable`, and `--disable`.
+pub fn resolve_codex_model_config_with_runtime_overrides(
     cwd: &Path,
     model_override: Option<&str>,
     runtime_config_overrides: &[String],

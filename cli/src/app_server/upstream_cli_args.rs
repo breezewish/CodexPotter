@@ -152,7 +152,9 @@ impl UpstreamCodexCliArgs {
         out
     }
 
-    pub(crate) fn effective_runtime_config_overrides(&self) -> Vec<String> {
+    /// Fold higher-level runtime flags into the effective `--config key=value` overrides that
+    /// determine startup-banner config resolution.
+    pub fn effective_runtime_config_overrides(&self) -> Vec<String> {
         let mut out = self.config_overrides.clone();
 
         if let Some(profile) = &self.profile {

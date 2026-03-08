@@ -117,6 +117,37 @@ pub struct PromptScreenOptions {
     pub composer_draft: Option<ChatComposerDraft>,
 }
 
+fn format_startup_banner_model_label(
+    codex_model: &crate::codex_config::ResolvedCodexModelConfig,
+) -> String {
+    let mut model_label = match codex_model.reasoning_effort {
+        Some(effort) => format!("{} {effort}", codex_model.model),
+        None => codex_model.model.clone(),
+    };
+    if codex_model.is_fast {
+        model_label.push_str(" [fast]");
+    }
+    model_label
+}
+
+fn build_prompt_screen_startup_banner_lines(
+    width: u16,
+    working_dir: &Path,
+    startup_codex_model_config: Option<crate::codex_config::ResolvedCodexModelConfig>,
+) -> std::io::Result<Vec<Line<'static>>> {
+    let codex_model = match startup_codex_model_config {
+        Some(codex_model) => codex_model,
+        None => crate::codex_config::resolve_codex_model_config(working_dir)?,
+    };
+
+    Ok(crate::startup_banner::build_startup_banner_lines(
+        width,
+        crate::CODEX_POTTER_VERSION,
+        &format_startup_banner_model_label(&codex_model),
+        working_dir,
+    ))
+}
+
 /// Prompt the user for a new task using the bottom-pane composer.
 ///
 /// Returns `Ok(Some(prompt))` when the user submits a prompt. Returns `Ok(None)` when the prompt
@@ -156,23 +187,11 @@ pub async fn prompt_user_with_tui(
     let mut should_pad_prompt_viewport = !show_startup_banner;
     if show_startup_banner {
         let width = tui.terminal.last_known_screen_size.width.max(1);
-        let codex_model = match startup_codex_model_config {
-            Some(codex_model) => codex_model,
-            None => crate::codex_config::resolve_codex_model_config(&file_search_dir)?,
-        };
-        let mut model_label = match codex_model.reasoning_effort {
-            Some(effort) => format!("{} {effort}", codex_model.model),
-            None => codex_model.model,
-        };
-        if codex_model.is_fast {
-            model_label.push_str(" [fast]");
-        }
-        let banner_lines = crate::startup_banner::build_startup_banner_lines(
+        let banner_lines = build_prompt_screen_startup_banner_lines(
             width,
-            crate::CODEX_POTTER_VERSION,
-            &model_label,
             &file_search_dir,
-        );
+            startup_codex_model_config,
+        )?;
         should_pad_prompt_viewport = should_pad_prompt_after_history_insert(&banner_lines);
         tui.insert_history_lines(banner_lines);
 
@@ -2015,6 +2034,12 @@ mod tests {
 
     fn lines_to_plain_strings(lines: &[ratatui::text::Line<'_>]) -> Vec<String> {
         lines.iter().map(line_to_plain_string).collect()
+    }
+
+    fn lines_to_plain_text(lines: &[ratatui::text::Line<'_>]) -> String {
+        let mut out = lines_to_plain_strings(lines).join("\n");
+        out.push('\n');
+        out
     }
 
     fn drain_history_cell_strings(
@@ -5923,6 +5948,25 @@ mod tests {
         assert_snapshot!(
             "prompt_footer_external_editor_override",
             render_prompt_footer_line(Some(PromptFooterOverride::ExternalEditorHint))
+        );
+    }
+
+    #[test]
+    fn prompt_screen_startup_banner_uses_pre_resolved_model_config() {
+        let lines = build_prompt_screen_startup_banner_lines(
+            120,
+            std::path::Path::new("/Users/example/repo"),
+            Some(crate::codex_config::ResolvedCodexModelConfig {
+                model: "gpt-5.4".to_string(),
+                reasoning_effort: Some(codex_protocol::openai_models::ReasoningEffort::High),
+                is_fast: true,
+            }),
+        )
+        .expect("build");
+
+        assert_snapshot!(
+            "prompt_screen_startup_banner_uses_pre_resolved_model_config",
+            lines_to_plain_text(&lines)
         );
     }
 }

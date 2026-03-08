@@ -36,6 +36,10 @@
 //! - <kbd>↑</kbd>/<kbd>↓</kbd>, and
 //! - <kbd>Ctrl</kbd>+<kbd>P</kbd>/<kbd>Ctrl</kbd>+<kbd>N</kbd>.
 //!
+//! There is no dedicated <kbd>Cmd</kbd>/<kbd>Super</kbd>+<kbd>↑</kbd>/<kbd>↓</kbd> branch in
+//! `codex-potter`; if a terminal reports those modified arrow keys at all, they follow the same
+//! routing as ordinary <kbd>↑</kbd>/<kbd>↓</kbd>.
+//!
 //! To avoid hijacking normal cursor movement, these keys only trigger history navigation when:
 //!
 //! - The input is empty, **or**
@@ -725,12 +729,6 @@ impl ChatComposer {
         };
 
         match key_event {
-            // Cmd+Up / Cmd+Down is treated as text navigation, not popup navigation.
-            super_nav @ KeyEvent {
-                code: KeyCode::Up | KeyCode::Down,
-                modifiers,
-                ..
-            } if modifiers.contains(KeyModifiers::SUPER) => self.handle_input_basic(super_nav),
             KeyEvent {
                 code: KeyCode::Up, ..
             }
@@ -907,12 +905,6 @@ impl ChatComposer {
         };
 
         match key_event {
-            // Cmd+Up / Cmd+Down is treated as text navigation, not popup navigation.
-            super_nav @ KeyEvent {
-                code: KeyCode::Up | KeyCode::Down,
-                modifiers,
-                ..
-            } if modifiers.contains(KeyModifiers::SUPER) => self.handle_input_basic(super_nav),
             KeyEvent {
                 code: KeyCode::Up, ..
             }
@@ -980,12 +972,6 @@ impl ChatComposer {
         let mut close_popup = false;
 
         let result = match key_event {
-            // Cmd+Up / Cmd+Down is treated as text navigation, not popup navigation.
-            super_nav @ KeyEvent {
-                code: KeyCode::Up | KeyCode::Down,
-                modifiers,
-                ..
-            } if modifiers.contains(KeyModifiers::SUPER) => self.handle_input_basic(super_nav),
             KeyEvent {
                 code: KeyCode::Up, ..
             }
@@ -1430,12 +1416,6 @@ impl ChatComposer {
                 kind: KeyEventKind::Press,
                 ..
             } if self.is_empty() => (InputResult::None, false),
-            // Cmd+Up / Cmd+Down is treated as text navigation, not history navigation.
-            KeyEvent {
-                code: KeyCode::Up | KeyCode::Down,
-                modifiers,
-                ..
-            } if modifiers.contains(KeyModifiers::SUPER) => self.handle_input_basic(key_event),
             // -------------------------------------------------------------
             // History navigation (Up / Down) – only when the composer is not
             // empty or when the cursor is at the correct position, to avoid
@@ -2310,102 +2290,120 @@ mod tests {
     }
 
     #[test]
-    fn super_down_does_not_navigate_history_when_browsing() {
+    fn super_down_matches_down_during_history_navigation() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
         use crossterm::event::KeyModifiers;
 
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
+
+        let mut regular = ChatComposer::new(
+            true,
+            sender.clone(),
+            false,
+            "Assign new task to CodexPotter".to_string(),
+            false,
+        );
+        regular.set_text_content("draft text".to_string());
+        assert_eq!(regular.clear_for_ctrl_c(), Some("draft text".to_string()));
+        assert!(regular.is_empty());
+        let (result, needs_redraw) =
+            regular.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(result, InputResult::None);
+        assert!(needs_redraw);
+
+        let mut super_modified = ChatComposer::new(
             true,
             sender,
             false,
             "Assign new task to CodexPotter".to_string(),
             false,
         );
-
-        composer.set_text_content("draft text".to_string());
-        assert_eq!(composer.clear_for_ctrl_c(), Some("draft text".to_string()));
-        assert!(composer.is_empty());
-
+        super_modified.set_text_content("draft text".to_string());
+        assert_eq!(
+            super_modified.clear_for_ctrl_c(),
+            Some("draft text".to_string())
+        );
+        assert!(super_modified.is_empty());
         let (result, needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+            super_modified.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
         assert_eq!(result, InputResult::None);
         assert!(needs_redraw);
-        assert_eq!(composer.current_text(), "draft text");
-        assert_eq!(composer.textarea.cursor(), composer.textarea.text().len());
 
-        let (result, needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::SUPER));
-        assert_eq!(result, InputResult::None);
-        assert!(needs_redraw);
-        assert_eq!(composer.current_text(), "draft text");
-        assert_eq!(composer.textarea.cursor(), composer.textarea.text().len());
+        let (expected_result, expected_redraw) =
+            regular.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        let (actual_result, actual_redraw) = super_modified.handle_key_event(KeyEvent::new(
+            KeyCode::Down,
+            KeyModifiers::SUPER,
+        ));
+
+        assert_eq!(actual_result, expected_result);
+        assert_eq!(actual_redraw, expected_redraw);
+        assert_eq!(super_modified.current_text(), regular.current_text());
+        assert_eq!(super_modified.textarea.cursor(), regular.textarea.cursor());
     }
 
     #[test]
-    fn super_down_in_slash_popup_does_not_move_popup_selection() {
+    fn super_down_matches_down_in_slash_popup() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
         use crossterm::event::KeyModifiers;
 
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
+
+        let mut regular = ChatComposer::new(
+            true,
+            sender.clone(),
+            false,
+            "Assign new task to CodexPotter".to_string(),
+            false,
+        );
+        regular.set_text_content("/".to_string());
+
+        let mut super_modified = ChatComposer::new(
             true,
             sender,
             false,
             "Assign new task to CodexPotter".to_string(),
             false,
         );
+        super_modified.set_text_content("/".to_string());
 
-        composer.set_text_content("/".to_string());
-        assert!(matches!(composer.active_popup, ActivePopup::Command(_)));
+        let (expected_result, expected_redraw) =
+            regular.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        let (actual_result, actual_redraw) = super_modified.handle_key_event(KeyEvent::new(
+            KeyCode::Down,
+            KeyModifiers::SUPER,
+        ));
 
-        let ActivePopup::Command(popup) = &composer.active_popup else {
+        assert_eq!(actual_result, expected_result);
+        assert_eq!(actual_redraw, expected_redraw);
+        assert_eq!(super_modified.textarea.cursor(), regular.textarea.cursor());
+
+        let ActivePopup::Command(expected_popup) = &regular.active_popup else {
             panic!("expected ActivePopup::Command");
         };
-        let selected_before = popup
-            .selected_item()
-            .expect("selected command")
-            .command()
-            .to_string();
-
-        let (result, needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-        assert_eq!(result, InputResult::None);
-        assert!(needs_redraw);
-
-        let ActivePopup::Command(popup) = &composer.active_popup else {
+        let ActivePopup::Command(actual_popup) = &super_modified.active_popup else {
             panic!("expected ActivePopup::Command");
         };
-        let selected_after_down = popup
-            .selected_item()
-            .expect("selected command")
-            .command()
-            .to_string();
-        assert_ne!(selected_after_down, selected_before);
-
-        let (result, needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::SUPER));
-        assert_eq!(result, InputResult::None);
-        assert!(needs_redraw);
-        assert_eq!(composer.textarea.cursor(), composer.textarea.text().len());
-
-        let ActivePopup::Command(popup) = &composer.active_popup else {
-            panic!("expected ActivePopup::Command");
-        };
-        let selected_after_super = popup
-            .selected_item()
-            .expect("selected command")
-            .command()
-            .to_string();
-        assert_eq!(selected_after_super, selected_after_down);
+        assert_eq!(
+            actual_popup
+                .selected_item()
+                .expect("selected command")
+                .command()
+                .to_string(),
+            expected_popup
+                .selected_item()
+                .expect("selected command")
+                .command()
+                .to_string()
+        );
     }
 
     #[test]
-    fn super_down_in_file_popup_does_not_move_popup_selection() {
+    fn super_down_matches_down_in_file_popup() {
         use codex_file_search::FileMatch;
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
@@ -2413,18 +2411,16 @@ mod tests {
 
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
+
+        let mut regular = ChatComposer::new(
             true,
-            sender,
+            sender.clone(),
             false,
             "Assign new task to CodexPotter".to_string(),
             false,
         );
-
-        composer.set_text_content("@a".to_string());
-        assert!(matches!(composer.active_popup, ActivePopup::File(_)));
-
-        composer.on_file_search_result(
+        regular.set_text_content("@a".to_string());
+        regular.on_file_search_result(
             "a".to_string(),
             vec![
                 FileMatch {
@@ -2440,40 +2436,73 @@ mod tests {
             ],
         );
 
-        let ActivePopup::File(popup) = &composer.active_popup else {
-            panic!("expected ActivePopup::File");
-        };
-        let selected_before = popup.selected_match().expect("selected match").to_string();
-
-        let (result, needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::SUPER));
-        assert_eq!(result, InputResult::None);
-        assert!(needs_redraw);
-        assert_eq!(composer.textarea.cursor(), composer.textarea.text().len());
-
-        let ActivePopup::File(popup) = &composer.active_popup else {
-            panic!("expected ActivePopup::File");
-        };
-        let selected_after = popup.selected_match().expect("selected match").to_string();
-        assert_eq!(selected_after, selected_before);
-    }
-
-    #[test]
-    fn super_down_in_skill_popup_does_not_move_popup_selection() {
-        use crossterm::event::KeyCode;
-        use crossterm::event::KeyEvent;
-        use crossterm::event::KeyModifiers;
-
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
+        let mut super_modified = ChatComposer::new(
             true,
             sender,
             false,
             "Assign new task to CodexPotter".to_string(),
             false,
         );
-        composer.skills = vec![
+        super_modified.set_text_content("@a".to_string());
+        super_modified.on_file_search_result(
+            "a".to_string(),
+            vec![
+                FileMatch {
+                    score: 10,
+                    path: "foo.rs".to_string(),
+                    indices: None,
+                },
+                FileMatch {
+                    score: 9,
+                    path: "bar.rs".to_string(),
+                    indices: None,
+                },
+            ],
+        );
+
+        let (expected_result, expected_redraw) =
+            regular.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        let (actual_result, actual_redraw) = super_modified.handle_key_event(KeyEvent::new(
+            KeyCode::Down,
+            KeyModifiers::SUPER,
+        ));
+
+        assert_eq!(actual_result, expected_result);
+        assert_eq!(actual_redraw, expected_redraw);
+        assert_eq!(super_modified.textarea.cursor(), regular.textarea.cursor());
+
+        let ActivePopup::File(expected_popup) = &regular.active_popup else {
+            panic!("expected ActivePopup::File");
+        };
+        let ActivePopup::File(actual_popup) = &super_modified.active_popup else {
+            panic!("expected ActivePopup::File");
+        };
+        assert_eq!(
+            actual_popup.selected_match().expect("selected match").to_string(),
+            expected_popup
+                .selected_match()
+                .expect("selected match")
+                .to_string()
+        );
+    }
+
+    #[test]
+    fn super_down_matches_down_in_skill_popup() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+
+        let mut regular = ChatComposer::new(
+            true,
+            sender.clone(),
+            false,
+            "Assign new task to CodexPotter".to_string(),
+            false,
+        );
+        regular.skills = vec![
             crate::skills_discovery::SkillMetadata {
                 name: "skill-a".to_string(),
                 description: "Skill A".to_string(),
@@ -2491,34 +2520,64 @@ mod tests {
                 scope: crate::skills_discovery::SkillScope::User,
             },
         ];
+        regular.set_text_content("$".to_string());
 
-        composer.set_text_content("$".to_string());
-        assert!(matches!(composer.active_popup, ActivePopup::Skill(_)));
+        let mut super_modified = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Assign new task to CodexPotter".to_string(),
+            false,
+        );
+        super_modified.skills = vec![
+            crate::skills_discovery::SkillMetadata {
+                name: "skill-a".to_string(),
+                description: "Skill A".to_string(),
+                short_description: None,
+                interface: None,
+                path: std::path::PathBuf::from("/tmp/skill-a/SKILL.md"),
+                scope: crate::skills_discovery::SkillScope::User,
+            },
+            crate::skills_discovery::SkillMetadata {
+                name: "skill-b".to_string(),
+                description: "Skill B".to_string(),
+                short_description: None,
+                interface: None,
+                path: std::path::PathBuf::from("/tmp/skill-b/SKILL.md"),
+                scope: crate::skills_discovery::SkillScope::User,
+            },
+        ];
+        super_modified.set_text_content("$".to_string());
 
-        let ActivePopup::Skill(popup) = &composer.active_popup else {
+        let (expected_result, expected_redraw) =
+            regular.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        let (actual_result, actual_redraw) = super_modified.handle_key_event(KeyEvent::new(
+            KeyCode::Down,
+            KeyModifiers::SUPER,
+        ));
+
+        assert_eq!(actual_result, expected_result);
+        assert_eq!(actual_redraw, expected_redraw);
+        assert_eq!(super_modified.textarea.cursor(), regular.textarea.cursor());
+
+        let ActivePopup::Skill(expected_popup) = &regular.active_popup else {
             panic!("expected ActivePopup::Skill");
         };
-        let selected_before = popup
-            .selected_mention()
-            .expect("selected mention")
-            .insert_text
-            .clone();
-
-        let (result, needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::SUPER));
-        assert_eq!(result, InputResult::None);
-        assert!(needs_redraw);
-        assert_eq!(composer.textarea.cursor(), composer.textarea.text().len());
-
-        let ActivePopup::Skill(popup) = &composer.active_popup else {
+        let ActivePopup::Skill(actual_popup) = &super_modified.active_popup else {
             panic!("expected ActivePopup::Skill");
         };
-        let selected_after = popup
-            .selected_mention()
-            .expect("selected mention")
-            .insert_text
-            .clone();
-        assert_eq!(selected_after, selected_before);
+        assert_eq!(
+            actual_popup
+                .selected_mention()
+                .expect("selected mention")
+                .insert_text
+                .clone(),
+            expected_popup
+                .selected_mention()
+                .expect("selected mention")
+                .insert_text
+                .clone()
+        );
     }
 
     #[test]

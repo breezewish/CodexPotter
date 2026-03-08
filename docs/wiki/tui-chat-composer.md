@@ -54,6 +54,9 @@ High-level flow:
 History navigation is treated as a special mode: while browsing history, popups are suppressed so
 continued Up/Down presses are not interrupted by popup focus changes.
 
+`ChatComposer` does not keep a separate `Cmd`/`Super`+`Up`/`Down` branch. If a terminal
+reports those modified arrows at all, they follow the same routing as ordinary `Up`/`Down`.
+
 ## Submission vs Newline
 
 The composer differentiates between:

@@ -244,9 +244,6 @@ impl TextArea {
     }
 
     /// Handle a single keyboard event and update the buffer/cursor.
-    ///
-    /// Divergence from upstream codex: `SUPER+Up` / `SUPER+Down` jumps to the beginning/end of
-    /// the entire buffer.
     pub fn input(&mut self, event: KeyEvent) {
         match event {
             // Some terminals (or configurations) send Control key chords as
@@ -440,21 +437,6 @@ impl TextArea {
                 ..
             } => {
                 self.set_cursor(self.end_of_next_word());
-            }
-            // Cmd+Up / Cmd+Down: jump to beginning/end of the entire buffer.
-            KeyEvent {
-                code: KeyCode::Up,
-                modifiers,
-                ..
-            } if modifiers.contains(KeyModifiers::SUPER) => {
-                self.set_cursor(0);
-            }
-            KeyEvent {
-                code: KeyCode::Down,
-                modifiers,
-                ..
-            } if modifiers.contains(KeyModifiers::SUPER) => {
-                self.set_cursor(self.text.len());
             }
             KeyEvent {
                 code: KeyCode::Up, ..
@@ -1660,19 +1642,6 @@ mod tests {
     }
 
     #[test]
-    fn super_up_down_jump_to_beginning_and_end_of_buffer() {
-        let mut t = ta_with("hello\nworld");
-        t.set_cursor(7);
-
-        t.input(KeyEvent::new(KeyCode::Up, KeyModifiers::SUPER));
-        assert_eq!(t.cursor(), 0);
-
-        t.set_cursor(2);
-        t.input(KeyEvent::new(KeyCode::Down, KeyModifiers::SUPER));
-        assert_eq!(t.cursor(), t.text().len());
-    }
-
-    #[test]
     fn delete_backward_word_alt_keys() {
         // Test the custom Alt+Ctrl+h binding
         let mut t = ta_with("hello world");
@@ -1690,6 +1659,31 @@ mod tests {
         t.input(KeyEvent::new(KeyCode::Backspace, KeyModifiers::ALT));
         assert_eq!(t.text(), "hello ");
         assert_eq!(t.cursor(), 6);
+    }
+
+    #[test]
+    fn super_up_down_match_regular_line_navigation() {
+        let mut regular = ta_with("hello\nworld");
+        regular.set_cursor(7);
+        regular.input(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+
+        let mut super_modified = ta_with("hello\nworld");
+        super_modified.set_cursor(7);
+        super_modified.input(KeyEvent::new(KeyCode::Up, KeyModifiers::SUPER));
+
+        assert_eq!(super_modified.text(), regular.text());
+        assert_eq!(super_modified.cursor(), regular.cursor());
+
+        let mut regular = ta_with("hello\nworld");
+        regular.set_cursor(2);
+        regular.input(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+
+        let mut super_modified = ta_with("hello\nworld");
+        super_modified.set_cursor(2);
+        super_modified.input(KeyEvent::new(KeyCode::Down, KeyModifiers::SUPER));
+
+        assert_eq!(super_modified.text(), regular.text());
+        assert_eq!(super_modified.cursor(), regular.cursor());
     }
 
     #[test]

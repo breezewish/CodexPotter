@@ -46,9 +46,11 @@ When the file search popup is visible:
 High-level flow:
 
 1. `ChatComposer::handle_key_event`
-2. If a popup is visible, route to a popup handler; otherwise route to
+2. Ignore `KeyEventKind::Release` at the entry, so key-up cannot move popups, browse history, or
+   re-run textarea edits.
+3. If a popup is visible, route to a popup handler; otherwise route to
    `ChatComposer::handle_key_event_without_popup`
-3. After handling any key, call `ChatComposer::sync_popups` so popup visibility matches the latest
+4. After handling any key, call `ChatComposer::sync_popups` so popup visibility matches the latest
    text/cursor state
 
 History navigation is treated as a special mode: while browsing history, popups are suppressed so

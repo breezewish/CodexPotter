@@ -26,7 +26,9 @@
 //!
 //! Most key handling goes through [`ChatComposer::handle_key_event`], which dispatches to a
 //! popup-specific handler if a popup is visible and otherwise to
-//! [`ChatComposer::handle_key_event_without_popup`]. After every handled key, we call
+//! [`ChatComposer::handle_key_event_without_popup`]. `KeyEventKind::Release` is ignored at this
+//! entry point so popup navigation, history navigation, and textarea edits all share the same
+//! key-up behavior. After every handled key, we call
 //! [`ChatComposer::sync_popups`] so UI state follows the latest buffer/cursor.
 //!
 //! # History Navigation (Up/Down)
@@ -707,6 +709,10 @@ impl ChatComposer {
 
     /// Handle a key event coming from the main UI.
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
+        if matches!(key_event.kind, KeyEventKind::Release) {
+            return (InputResult::None, false);
+        }
+
         let result = match &mut self.active_popup {
             ActivePopup::Command(_) => self.handle_key_event_with_slash_popup(key_event),
             ActivePopup::File(_) => self.handle_key_event_with_file_popup(key_event),
@@ -2474,6 +2480,55 @@ mod tests {
                 .command()
                 .to_string()
         );
+    }
+
+    #[test]
+    fn release_down_does_not_move_slash_popup_selection() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyEventKind;
+        use crossterm::event::KeyEventState;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Assign new task to CodexPotter".to_string(),
+            false,
+        );
+        composer.set_text_content("/".to_string());
+
+        let ActivePopup::Command(popup) = &composer.active_popup else {
+            panic!("expected ActivePopup::Command");
+        };
+        let selected_before = popup
+            .selected_item()
+            .expect("selected command")
+            .command()
+            .to_string();
+
+        let (result, needs_redraw) = composer.handle_key_event(KeyEvent {
+            code: KeyCode::Down,
+            modifiers: KeyModifiers::SUPER,
+            kind: KeyEventKind::Release,
+            state: KeyEventState::NONE,
+        });
+
+        assert_eq!(result, InputResult::None);
+        assert!(!needs_redraw);
+
+        let ActivePopup::Command(popup) = &composer.active_popup else {
+            panic!("expected ActivePopup::Command");
+        };
+        let selected_after = popup
+            .selected_item()
+            .expect("selected command")
+            .command()
+            .to_string();
+        assert_eq!(selected_after, selected_before);
     }
 
     #[test]

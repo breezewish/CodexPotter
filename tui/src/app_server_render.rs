@@ -834,6 +834,7 @@ impl AppServerEventProcessor {
                 self.flush_pending_success_ran_cell();
                 self.flush_pending_compact_patch_changes();
                 self.pending_view_image_paths.push(ev.path);
+                self.had_work_activity = true;
             }
             EventMsg::ExecCommandEnd(ev) => {
                 // Align with upstream Codex TUI behavior: flush any newline-gated agent output
@@ -6229,6 +6230,91 @@ mod tests {
             "round_renderer_live_viewed_images_in_minimal_transient_lines",
             lines_to_plain_text(&transient_lines)
         );
+    }
+
+    #[test]
+    fn round_renderer_simple_renders_live_viewed_images_and_separator() {
+        let width: u16 = 80;
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let app_event_tx = AppEventSender::new(tx_raw);
+        let mut proc = AppServerEventProcessor::new(app_event_tx.clone(), Verbosity::Simple);
+        proc.emit_user_prompt("test prompt".to_string());
+        let _ = drain_history_cell_strings(&mut rx, width);
+
+        for (id, path) in [
+            ("view-image-1", "/tmp/slock_ui_05_invite_human_modal.png"),
+            ("view-image-2", "/tmp/slock_ui_06_edit_channel_modal.png"),
+        ] {
+            proc.handle_codex_event(Event {
+                id: id.into(),
+                msg: EventMsg::ViewImageToolCall(ViewImageToolCallEvent {
+                    call_id: id.into(),
+                    path: PathBuf::from(path),
+                }),
+            });
+        }
+
+        assert!(rx.try_recv().is_err());
+
+        let (codex_op_tx, _codex_op_rx) = unbounded_channel::<Op>();
+        let file_search_dir = std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir());
+        let file_search = FileSearchManager::new(file_search_dir, app_event_tx.clone());
+        let mut bottom_pane = BottomPane::new(BottomPaneParams {
+            frame_requester: crate::tui::FrameRequester::test_dummy(),
+            enhanced_keys_supported: false,
+            app_event_tx: app_event_tx.clone(),
+            animations_enabled: false,
+            placeholder_text: "Assign new task to CodexPotter".to_string(),
+            disable_paste_burst: false,
+        });
+        bottom_pane.set_prompt_footer_context(PromptFooterContext::new(
+            PathBuf::from("project"),
+            Some("main".to_string()),
+        ));
+        bottom_pane.set_task_running(true);
+
+        let mut app = RenderAppState::new(
+            proc,
+            app_event_tx,
+            Some(codex_op_tx),
+            bottom_pane,
+            crate::prompt_history_store::PromptHistoryStore::new(),
+            file_search,
+            VecDeque::new(),
+        );
+        app.has_emitted_history_lines = true;
+
+        pretty_assertions::assert_eq!(
+            lines_to_plain_strings(&app.build_transient_lines(width)),
+            vec![
+                "".to_string(),
+                "• Viewed Image".to_string(),
+                "  └ /tmp/slock_ui_05_invite_human_modal.png".to_string(),
+                "    /tmp/slock_ui_06_edit_channel_modal.png".to_string(),
+            ]
+        );
+
+        app.processor.handle_codex_event(Event {
+            id: "agent-message".into(),
+            msg: EventMsg::AgentMessage(AgentMessageEvent {
+                message: "ok".into(),
+                phase: None,
+            }),
+        });
+
+        let events = drain_history_cell_strings(&mut rx, width);
+        let [viewed_images, _separator, agent_message] = events.as_slice() else {
+            panic!("expected viewed image cell, separator, then agent message");
+        };
+        pretty_assertions::assert_eq!(
+            viewed_images,
+            &vec![
+                "• Viewed Image".to_string(),
+                "  └ /tmp/slock_ui_05_invite_human_modal.png".to_string(),
+                "    /tmp/slock_ui_06_edit_channel_modal.png".to_string(),
+            ]
+        );
+        pretty_assertions::assert_eq!(agent_message, &vec!["• ok".to_string()]);
     }
 
     #[test]

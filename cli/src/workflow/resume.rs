@@ -31,10 +31,14 @@ use codex_protocol::protocol::PotterRoundOutcome;
 #[cfg(test)]
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_tui::ExitReason;
+use codex_tui::InterruptedProjectAction;
 use tokio::sync::mpsc::unbounded_channel;
 
 const PROJECT_MAIN_FILE: &str = "MAIN.md";
 const CODEXPOTTER_DIR: &str = ".codexpotter";
+
+// Sentinel prompt for `Interrupt -> Continue`: forces a new turn while retrying the same round.
+const PROGRESS_FILE_CHANGED_TURN_PROMPT_OVERRIDE: &str = "Progress file has been changed by user";
 
 trait ResumeUi: crate::workflow::round_runner::PotterRoundUi {
     fn clear(&mut self) -> anyhow::Result<()>;
@@ -43,6 +47,16 @@ trait ResumeUi: crate::workflow::round_runner::PotterRoundUi {
         &'a mut self,
         actions: Vec<String>,
     ) -> crate::workflow::round_runner::UiFuture<'a, Option<usize>>;
+
+    fn prompt_interrupted_project_action<'a>(
+        &'a mut self,
+        progress_file_rel: PathBuf,
+    ) -> crate::workflow::round_runner::UiFuture<'a, Option<InterruptedProjectAction>>;
+
+    fn insert_interrupted_project_summary_block(
+        &mut self,
+        summary: crate::app_server::potter::InterruptedProjectSummary,
+    );
 }
 
 impl ResumeUi for codex_tui::CodexPotterTui {
@@ -57,6 +71,29 @@ impl ResumeUi for codex_tui::CodexPotterTui {
         Box::pin(codex_tui::CodexPotterTui::prompt_action_picker(
             self, actions,
         ))
+    }
+
+    fn prompt_interrupted_project_action<'a>(
+        &'a mut self,
+        progress_file_rel: PathBuf,
+    ) -> crate::workflow::round_runner::UiFuture<'a, Option<InterruptedProjectAction>> {
+        Box::pin(
+            codex_tui::CodexPotterTui::prompt_interrupted_project_action(self, progress_file_rel),
+        )
+    }
+
+    fn insert_interrupted_project_summary_block(
+        &mut self,
+        summary: crate::app_server::potter::InterruptedProjectSummary,
+    ) {
+        codex_tui::CodexPotterTui::insert_interrupted_project_summary(
+            self,
+            summary.rounds,
+            summary.duration,
+            summary.user_prompt_file,
+            summary.git_commit_start,
+            summary.git_commit_end,
+        );
     }
 }
 
@@ -394,46 +431,93 @@ where
         start_rounds_response.rounds_total
     );
 
-    let exit = crate::workflow::project_render_loop::run_potter_project_render_loop(
-        ui,
-        app_server,
-        &project_id,
-        crate::workflow::project_render_loop::PotterProjectRenderOptions {
-            turn_prompt: crate::workflow::project::fixed_prompt()
-                .trim_end()
-                .to_string(),
-            prompt_footer,
-            pad_before_first_cell: true,
-            initial_status_header_prefix,
-        },
-        buffered_events,
-    )
-    .await?;
+    let turn_prompt = crate::workflow::project::fixed_prompt()
+        .trim_end()
+        .to_string();
+    let mut buffered_events = buffered_events;
+    let mut pad_before_first_cell = true;
+    let mut initial_status_header_prefix = initial_status_header_prefix;
 
-    match exit {
-        crate::workflow::project_render_loop::PotterProjectRenderExit::Completed { .. } => {
-            Ok(ResumeExit::Completed)
-        }
-        crate::workflow::project_render_loop::PotterProjectRenderExit::Interrupted { .. } => {
-            let _ = app_server
-                .project_resolve_interrupt(
-                    crate::app_server::potter::ProjectResolveInterruptParams {
-                        project_id: project_id.clone(),
-                        action: crate::app_server::potter::ResolveInterruptAction::Stop,
-                        turn_prompt_override: None,
-                    },
-                )
-                .await
-                .context("project/resolve_interrupt(stop) via potter app-server")?;
-            Ok(ResumeExit::UserRequested)
-        }
-        crate::workflow::project_render_loop::PotterProjectRenderExit::UserRequested => {
-            let _ = app_server.project_interrupt(project_id.clone()).await;
-            Ok(ResumeExit::UserRequested)
-        }
-        crate::workflow::project_render_loop::PotterProjectRenderExit::FatalExitRequested => {
-            let _ = app_server.project_interrupt(project_id.clone()).await;
-            Ok(ResumeExit::FatalExitRequested)
+    loop {
+        let exit = crate::workflow::project_render_loop::run_potter_project_render_loop(
+            ui,
+            app_server,
+            &project_id,
+            crate::workflow::project_render_loop::PotterProjectRenderOptions {
+                turn_prompt: turn_prompt.clone(),
+                prompt_footer: prompt_footer.clone(),
+                pad_before_first_cell,
+                initial_status_header_prefix,
+            },
+            buffered_events,
+        )
+        .await?;
+
+        pad_before_first_cell = false;
+        initial_status_header_prefix = None;
+
+        match exit {
+            crate::workflow::project_render_loop::PotterProjectRenderExit::Completed { .. } => {
+                return Ok(ResumeExit::Completed);
+            }
+            crate::workflow::project_render_loop::PotterProjectRenderExit::Interrupted {
+                user_prompt_file,
+            } => {
+                let action = ui
+                    .prompt_interrupted_project_action(user_prompt_file)
+                    .await?
+                    .unwrap_or(InterruptedProjectAction::StopIterate);
+
+                match action {
+                    InterruptedProjectAction::StopIterate => {
+                        let (response, _buffered_events) = app_server
+                            .project_resolve_interrupt(
+                                crate::app_server::potter::ProjectResolveInterruptParams {
+                                    project_id: project_id.clone(),
+                                    action: crate::app_server::potter::ResolveInterruptAction::Stop,
+                                    turn_prompt_override: None,
+                                },
+                            )
+                            .await
+                            .context("project/resolve_interrupt(stop) via potter app-server")?;
+
+                        let summary = response.summary.context(
+                            "internal error: missing summary for resolve_interrupt(stop)",
+                        )?;
+                        ui.insert_interrupted_project_summary_block(summary);
+                        return Ok(ResumeExit::Completed);
+                    }
+                    InterruptedProjectAction::ContinueIterate => {
+                        let (response, buffered) = app_server
+                            .project_resolve_interrupt(
+                                crate::app_server::potter::ProjectResolveInterruptParams {
+                                    project_id: project_id.clone(),
+                                    action:
+                                        crate::app_server::potter::ResolveInterruptAction::Continue,
+                                    turn_prompt_override: Some(
+                                        PROGRESS_FILE_CHANGED_TURN_PROMPT_OVERRIDE.to_string(),
+                                    ),
+                                },
+                            )
+                            .await
+                            .context("project/resolve_interrupt(continue) via potter app-server")?;
+
+                        anyhow::ensure!(
+                            response.summary.is_none(),
+                            "internal error: resolve_interrupt(continue) returned summary"
+                        );
+                        buffered_events = buffered;
+                    }
+                }
+            }
+            crate::workflow::project_render_loop::PotterProjectRenderExit::UserRequested => {
+                let _ = app_server.project_interrupt(project_id.clone()).await;
+                return Ok(ResumeExit::UserRequested);
+            }
+            crate::workflow::project_render_loop::PotterProjectRenderExit::FatalExitRequested => {
+                let _ = app_server.project_interrupt(project_id.clone()).await;
+                return Ok(ResumeExit::FatalExitRequested);
+            }
         }
     }
 }
@@ -1063,11 +1147,14 @@ mod tests {
         SetProjectStartedAt(Instant),
         RenderRound,
         PromptActionPicker(Vec<String>),
+        PromptInterruptedProjectAction(PathBuf),
+        InsertInterruptedProjectSummary(crate::app_server::potter::InterruptedProjectSummary),
     }
 
     #[derive(Debug, Default)]
     struct MockResumeUi {
         ops: Vec<MockUiOp>,
+        interrupted_action: Option<InterruptedProjectAction>,
     }
 
     impl crate::workflow::round_runner::PotterRoundUi for MockResumeUi {
@@ -1132,6 +1219,26 @@ mod tests {
         ) -> crate::workflow::round_runner::UiFuture<'a, Option<usize>> {
             self.ops.push(MockUiOp::PromptActionPicker(actions));
             Box::pin(async { Ok(Some(0)) })
+        }
+
+        fn prompt_interrupted_project_action<'a>(
+            &'a mut self,
+            progress_file_rel: PathBuf,
+        ) -> crate::workflow::round_runner::UiFuture<'a, Option<InterruptedProjectAction>> {
+            self.ops
+                .push(MockUiOp::PromptInterruptedProjectAction(progress_file_rel));
+            let action = self
+                .interrupted_action
+                .unwrap_or(InterruptedProjectAction::StopIterate);
+            Box::pin(async move { Ok(Some(action)) })
+        }
+
+        fn insert_interrupted_project_summary_block(
+            &mut self,
+            summary: crate::app_server::potter::InterruptedProjectSummary,
+        ) {
+            self.ops
+                .push(MockUiOp::InsertInterruptedProjectSummary(summary));
         }
     }
 
@@ -1227,6 +1334,85 @@ mod tests {
         }
     }
 
+    #[derive(Debug, Default)]
+    struct InterruptHandlingAppServer {
+        start_rounds_buffered_events: Vec<Event>,
+        resolve_interrupt_calls: Vec<crate::app_server::potter::ProjectResolveInterruptParams>,
+        resolve_interrupt_responses: std::collections::VecDeque<(
+            crate::app_server::potter::ProjectResolveInterruptResponse,
+            Vec<Event>,
+        )>,
+        interrupt_calls: Vec<String>,
+    }
+
+    impl crate::workflow::project_render_loop::PotterEventSource for InterruptHandlingAppServer {
+        fn read_next_event<'a>(
+            &'a mut self,
+        ) -> crate::workflow::round_runner::UiFuture<'a, Option<Event>> {
+            Box::pin(async { Ok(None) })
+        }
+    }
+
+    impl crate::workflow::project_render_loop::PotterProjectController for InterruptHandlingAppServer {
+        fn interrupt_project<'a>(
+            &'a mut self,
+            _project_id: String,
+        ) -> crate::workflow::round_runner::UiFuture<'a, Vec<Event>> {
+            Box::pin(async { Ok(Vec::new()) })
+        }
+    }
+
+    impl ResumeAppServer for InterruptHandlingAppServer {
+        fn project_start_rounds<'a>(
+            &'a mut self,
+            params: crate::app_server::potter::ProjectStartRoundsParams,
+        ) -> crate::workflow::round_runner::UiFuture<
+            'a,
+            (
+                crate::app_server::potter::ProjectStartRoundsResponse,
+                Vec<Event>,
+            ),
+        > {
+            Box::pin(async move {
+                Ok((
+                    crate::app_server::potter::ProjectStartRoundsResponse {
+                        rounds_total: params.rounds.unwrap_or(1),
+                    },
+                    std::mem::take(&mut self.start_rounds_buffered_events),
+                ))
+            })
+        }
+
+        fn project_interrupt<'a>(
+            &'a mut self,
+            project_id: String,
+        ) -> crate::workflow::round_runner::UiFuture<'a, ()> {
+            Box::pin(async move {
+                self.interrupt_calls.push(project_id);
+                Ok(())
+            })
+        }
+
+        fn project_resolve_interrupt<'a>(
+            &'a mut self,
+            params: crate::app_server::potter::ProjectResolveInterruptParams,
+        ) -> crate::workflow::round_runner::UiFuture<
+            'a,
+            (
+                crate::app_server::potter::ProjectResolveInterruptResponse,
+                Vec<Event>,
+            ),
+        > {
+            Box::pin(async move {
+                self.resolve_interrupt_calls.push(params);
+                Ok(self
+                    .resolve_interrupt_responses
+                    .pop_front()
+                    .expect("missing project_resolve_interrupt response"))
+            })
+        }
+    }
+
     #[tokio::test]
     async fn resume_total_elapsed_timer_starts_after_action_selection() {
         use std::time::Duration;
@@ -1311,6 +1497,226 @@ mod tests {
                 MockUiOp::PromptActionPicker(vec![String::from("Continue & iterate 1 more round")]),
                 MockUiOp::SetProjectStartedAt(continue_started_at),
                 MockUiOp::RenderRound,
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn resume_interrupted_project_prompts_and_can_continue_iterating() {
+        use std::time::Duration;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let base = Instant::now();
+        let replay_started_at = base + Duration::from_secs(10);
+        let continue_started_at = base + Duration::from_secs(20);
+        let clock = FixedResumeClock::new(vec![replay_started_at, continue_started_at]);
+
+        let progress_file_rel = PathBuf::from(".codexpotter/projects/2026/02/01/1/MAIN.md");
+        let project_id = String::from("project_1");
+
+        let resume = crate::app_server::potter::ProjectResumeResponse {
+            project_id: project_id.clone(),
+            working_dir: temp.path().to_path_buf(),
+            project_dir: temp.path().join("project"),
+            progress_file_rel: progress_file_rel.clone(),
+            progress_file: temp.path().join(&progress_file_rel),
+            git_branch: None,
+            replay: crate::app_server::potter::ProjectResumeReplay {
+                completed_rounds: Vec::new(),
+            },
+            unfinished_round: None,
+        };
+
+        let mut app_server = InterruptHandlingAppServer {
+            start_rounds_buffered_events: vec![
+                Event {
+                    id: String::new(),
+                    msg: EventMsg::PotterRoundStarted {
+                        current: 1,
+                        total: 1,
+                    },
+                },
+                Event {
+                    id: String::new(),
+                    msg: EventMsg::PotterRoundFinished {
+                        outcome: PotterRoundOutcome::Interrupted,
+                    },
+                },
+                Event {
+                    id: String::new(),
+                    msg: EventMsg::PotterProjectInterrupted {
+                        project_id: project_id.clone(),
+                        user_prompt_file: progress_file_rel.clone(),
+                    },
+                },
+            ],
+            resolve_interrupt_responses: std::collections::VecDeque::from([(
+                crate::app_server::potter::ProjectResolveInterruptResponse { summary: None },
+                vec![
+                    Event {
+                        id: String::new(),
+                        msg: EventMsg::PotterRoundStarted {
+                            current: 1,
+                            total: 1,
+                        },
+                    },
+                    Event {
+                        id: String::new(),
+                        msg: EventMsg::PotterRoundFinished {
+                            outcome: PotterRoundOutcome::Completed,
+                        },
+                    },
+                    Event {
+                        id: String::new(),
+                        msg: EventMsg::PotterProjectCompleted {
+                            outcome: PotterProjectOutcome::BudgetExhausted,
+                        },
+                    },
+                ],
+            )]),
+            ..Default::default()
+        };
+        let mut ui = MockResumeUi {
+            interrupted_action: Some(InterruptedProjectAction::ContinueIterate),
+            ..Default::default()
+        };
+
+        let exit = run_resume_with_deps(
+            &mut ui,
+            &mut app_server,
+            resume,
+            NonZeroUsize::new(1).expect("iterate rounds"),
+            &clock,
+        )
+        .await
+        .expect("run resume");
+        assert_eq!(exit, ResumeExit::Completed);
+
+        assert_eq!(
+            app_server.resolve_interrupt_calls,
+            vec![crate::app_server::potter::ProjectResolveInterruptParams {
+                project_id,
+                action: crate::app_server::potter::ResolveInterruptAction::Continue,
+                turn_prompt_override: Some(PROGRESS_FILE_CHANGED_TURN_PROMPT_OVERRIDE.to_string()),
+            }]
+        );
+        assert_eq!(app_server.interrupt_calls, Vec::<String>::new());
+
+        assert_eq!(
+            ui.ops,
+            vec![
+                MockUiOp::Clear,
+                MockUiOp::SetProjectStartedAt(replay_started_at),
+                MockUiOp::PromptActionPicker(vec![String::from("Iterate 1 more round")]),
+                MockUiOp::SetProjectStartedAt(continue_started_at),
+                MockUiOp::RenderRound,
+                MockUiOp::PromptInterruptedProjectAction(progress_file_rel),
+                MockUiOp::RenderRound,
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn resume_interrupted_project_stop_inserts_summary_block() {
+        use std::time::Duration;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let base = Instant::now();
+        let replay_started_at = base + Duration::from_secs(10);
+        let continue_started_at = base + Duration::from_secs(20);
+        let clock = FixedResumeClock::new(vec![replay_started_at, continue_started_at]);
+
+        let progress_file_rel = PathBuf::from(".codexpotter/projects/2026/02/01/1/MAIN.md");
+        let project_id = String::from("project_1");
+
+        let resume = crate::app_server::potter::ProjectResumeResponse {
+            project_id: project_id.clone(),
+            working_dir: temp.path().to_path_buf(),
+            project_dir: temp.path().join("project"),
+            progress_file_rel: progress_file_rel.clone(),
+            progress_file: temp.path().join(&progress_file_rel),
+            git_branch: None,
+            replay: crate::app_server::potter::ProjectResumeReplay {
+                completed_rounds: Vec::new(),
+            },
+            unfinished_round: None,
+        };
+
+        let summary = crate::app_server::potter::InterruptedProjectSummary {
+            rounds: 1,
+            duration: Duration::from_secs(1),
+            user_prompt_file: progress_file_rel.clone(),
+            git_commit_start: String::from("a"),
+            git_commit_end: String::from("b"),
+        };
+
+        let mut app_server = InterruptHandlingAppServer {
+            start_rounds_buffered_events: vec![
+                Event {
+                    id: String::new(),
+                    msg: EventMsg::PotterRoundStarted {
+                        current: 1,
+                        total: 1,
+                    },
+                },
+                Event {
+                    id: String::new(),
+                    msg: EventMsg::PotterRoundFinished {
+                        outcome: PotterRoundOutcome::Interrupted,
+                    },
+                },
+                Event {
+                    id: String::new(),
+                    msg: EventMsg::PotterProjectInterrupted {
+                        project_id: project_id.clone(),
+                        user_prompt_file: progress_file_rel.clone(),
+                    },
+                },
+            ],
+            resolve_interrupt_responses: std::collections::VecDeque::from([(
+                crate::app_server::potter::ProjectResolveInterruptResponse {
+                    summary: Some(summary.clone()),
+                },
+                Vec::new(),
+            )]),
+            ..Default::default()
+        };
+        let mut ui = MockResumeUi {
+            interrupted_action: Some(InterruptedProjectAction::StopIterate),
+            ..Default::default()
+        };
+
+        let exit = run_resume_with_deps(
+            &mut ui,
+            &mut app_server,
+            resume,
+            NonZeroUsize::new(1).expect("iterate rounds"),
+            &clock,
+        )
+        .await
+        .expect("run resume");
+        assert_eq!(exit, ResumeExit::Completed);
+
+        assert_eq!(
+            app_server.resolve_interrupt_calls,
+            vec![crate::app_server::potter::ProjectResolveInterruptParams {
+                project_id,
+                action: crate::app_server::potter::ResolveInterruptAction::Stop,
+                turn_prompt_override: None,
+            }]
+        );
+        assert_eq!(app_server.interrupt_calls, Vec::<String>::new());
+
+        assert_eq!(
+            ui.ops,
+            vec![
+                MockUiOp::Clear,
+                MockUiOp::SetProjectStartedAt(replay_started_at),
+                MockUiOp::PromptActionPicker(vec![String::from("Iterate 1 more round")]),
+                MockUiOp::SetProjectStartedAt(continue_started_at),
+                MockUiOp::RenderRound,
+                MockUiOp::PromptInterruptedProjectAction(progress_file_rel),
+                MockUiOp::InsertInterruptedProjectSummary(summary),
             ]
         );
     }

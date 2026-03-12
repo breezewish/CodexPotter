@@ -33,6 +33,7 @@ use clap::FromArgMatches;
 use clap::Parser;
 use clap::Subcommand;
 use clap::ValueEnum;
+use std::ffi::OsStr;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
 #[clap(rename_all = "kebab-case")]
@@ -356,9 +357,11 @@ async fn main() -> anyhow::Result<()> {
                         .take_queued_user_prompts()
                         .into_iter()
                         .collect::<Vec<_>>();
+                    let resume_note_path = derive_resume_project_path_for_note(&project_path);
                     let _ = potter_app_server.shutdown().await;
                     drop(ui);
                     print_queued_prompts_note(&queued_prompts);
+                    print_resume_note(&resume_note_path);
                     return Ok(());
                 }
                 crate::workflow::resume::ResumeExit::FatalExitRequested => {
@@ -458,6 +461,39 @@ fn derive_resume_project_path_from_project_dir(project_dir: &Path) -> Option<Str
         return None;
     }
     Some(parts.join("/"))
+}
+
+fn derive_resume_project_path_for_note(project_path: &Path) -> String {
+    let project_dir = if project_path.file_name() == Some(OsStr::new("MAIN.md")) {
+        project_path.parent().unwrap_or(project_path)
+    } else {
+        project_path
+    };
+
+    if let Some(short_path) = derive_resume_project_path_from_project_dir(project_dir) {
+        return short_path;
+    }
+
+    // The resume picker can return absolute project paths. Prefer printing a stable
+    // `.codexpotter/projects/...` short form when we can find that segment.
+    let parts = project_dir
+        .components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(part) => Some(part.to_string_lossy().to_string()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    if let Some(codexpotter_idx) = parts.iter().rposition(|part| part == ".codexpotter")
+        && parts.get(codexpotter_idx + 1).map(String::as_str) == Some("projects")
+    {
+        let remainder = &parts[(codexpotter_idx + 2)..];
+        if !remainder.is_empty() {
+            return remainder.join("/");
+        }
+    }
+
+    crate::path_utils::display_with_tilde(project_path)
 }
 
 fn print_resume_note(project_path: &str) {
@@ -745,6 +781,27 @@ mod tests {
         assert_eq!(
             derive_resume_project_path_from_project_dir(project_dir),
             None
+        );
+    }
+
+    #[test]
+    fn derive_resume_project_path_for_note_keeps_short_form() {
+        assert_eq!(
+            derive_resume_project_path_for_note(Path::new("2026/02/01/1")),
+            "2026/02/01/1"
+        );
+    }
+
+    #[test]
+    fn derive_resume_project_path_for_note_strips_absolute_codexpotter_prefix() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let project_path = temp
+            .path()
+            .join(".codexpotter/projects/2026/02/01/1/MAIN.md");
+
+        assert_eq!(
+            derive_resume_project_path_for_note(&project_path),
+            "2026/02/01/1"
         );
     }
 

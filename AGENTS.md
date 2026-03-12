@@ -40,6 +40,7 @@ The rules below are some typical principles. They are not exhaustive, and you mu
 - Use method references over closures when possible per https://rust-lang.github.io/rust-clippy/master/index.html#redundant_closure_for_method_calls
 - When writing tests, prefer comparing the equality of entire objects over fields one by one.
 - Always use English for code, comments, commit messages, PR titles/descriptions, and documentation.
+- Keep interactive behavior parity between a fresh interactive session and `codex-potter resume` during **live iteration** (replay is exempt). E.g. `Esc` during a running round should interrupt and reach the same Stop/Continue decision prompt, Stop should insert the interrupted summary block, and user-requested exit should print the same resume hint.
 - `tui/` module must only contain pure UI rendering logic. Business logic must not be placed there.
 - IMPORTANT: When working with `tui/`, must follow conventions in `tui/AGENTS.md` strictly.
 - Run `cargo fmt` and `cargo clippy` before committing code.

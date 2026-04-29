@@ -60,13 +60,13 @@ For agents: This file is carefully maintained and polished for better readabilit
 
 ## ⚡️ Getting started
 
-1. Use the all-in-one installer, it helps you set up gitignore, subagent definitions and skills:
+1. Use the all-in-one wizard, it helps you set up gitignore, subagent definitions and skills _globally_:
 
 ```bash
-npx codex-potter@next init
+npx codex-potter@next setup
 ```
 
-2. Use `$loop` to trigger the workflow in Codex CLI or Codex Desktop:
+2. Use `$loop` to trigger the CodexPotter workflow in Codex CLI or Codex Desktop:
 
 ```plain
 $loop Implement /ps endpoint according to docs/ps_design.md
@@ -130,6 +130,7 @@ Make sure all user journeys are properly covered by e2e tests and pass.
 ## Roadmap
 
 - [x] Resume
+- [ ] Handling steer
 - [ ] Better handling of stream disconnect / similar network issues
 - [ ] Agent-call friendly (non-interactive exec and resume)
 - [x] Interoperability with codex CLI sessions (for follow-up prompts)

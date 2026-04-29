@@ -13,6 +13,7 @@ const CODEXPOTTER_GITIGNORE_ENTRY = "/.codexpotter";
 const LOOP_SKILL_COMMAND = [
   "skills",
   "add",
+  "--yes",
   "-g",
   "https://github.com/breezewish/CodexPotter/tree/v2",
   "-a",
@@ -38,7 +39,7 @@ async function main(args) {
     return 1;
   }
 
-  if (command !== "init") {
+  if (command !== "setup") {
     if (command) {
       printErrors([`Unknown command: ${command}`]);
     }
@@ -46,7 +47,7 @@ async function main(args) {
     return command ? 1 : 0;
   }
 
-  await runInit({ yes });
+  await runSetup({ yes });
   return 0;
 }
 
@@ -78,10 +79,10 @@ function printAvailableCommands() {
   console.log(format("CodexPotter", "bold"));
   console.log("");
   console.log("Usage:");
-  console.log("  codex-potter init [--yes]");
+  console.log("  codex-potter setup [--yes]");
   console.log("");
   console.log("Available commands:");
-  console.log("  init    Configure CodexPotter for $loop.");
+  console.log("  setup    Configure CodexPotter for $loop.");
 }
 
 function printErrors(errors) {
@@ -90,7 +91,7 @@ function printErrors(errors) {
   }
 }
 
-async function runInit({ yes }) {
+async function runSetup({ yes }) {
   const home = getHomeDir();
   const resourcePath = path.join(
     __dirname,
@@ -109,7 +110,7 @@ async function runInit({ yes }) {
   const profileNeedsWrite = currentProfileContent !== profileContent;
   const skillInstaller = resolveSkillInstaller();
 
-  printInitPlan({
+  printSetupPlan({
     gitignoreNeedsWrite,
     profileNeedsWrite,
     profilePath,
@@ -117,7 +118,7 @@ async function runInit({ yes }) {
   });
 
   if (!yes && !(await confirm())) {
-    console.log("Initialization cancelled.");
+    console.log("Setup cancelled.");
     return;
   }
 
@@ -147,7 +148,7 @@ async function runInit({ yes }) {
   await runLoopSkillInstaller(skillInstaller);
 
   console.log("");
-  console.log(format("✨ CodexPotter initialized!", "green"));
+  console.log(format("✨ CodexPotter setup complete!", "green"));
   console.log(
     `${format("Usage in Codex:", "bold")} ${format(
       "$loop",
@@ -156,13 +157,13 @@ async function runInit({ yes }) {
   );
 }
 
-function printInitPlan({
+function printSetupPlan({
   gitignoreNeedsWrite,
   profileNeedsWrite,
   profilePath,
   skillInstaller,
 }) {
-  console.log(format("CodexPotter init", "bold"));
+  console.log(format("CodexPotter setup", "bold"));
   console.log("");
   console.log(
     `${statusLabel(gitignoreNeedsWrite)} Ignore ${format(

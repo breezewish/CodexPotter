@@ -1,0 +1,66 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*-next.*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publish-npm-next:
+    name: publish-npm-next
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate tag and extract version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          [[ "${GITHUB_REF_TYPE}" == "tag" ]] \
+            || { echo "Not a tag push"; exit 1; }
+          [[ "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-next\.[0-9]+$ ]] \
+            || {
+              echo "Tag '${GITHUB_REF_NAME}' must match vX.Y.Z-next.N"
+              exit 1
+            }
+
+          version="${GITHUB_REF_NAME#v}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Update npm
+        run: npm install -g npm@latest
+
+      - name: Set package version
+        working-directory: npm
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          node -e 'const fs = require("node:fs"); const packageJson = JSON.parse(fs.readFileSync("package.json", "utf8")); packageJson.version = process.env.VERSION; fs.writeFileSync("package.json", JSON.stringify(packageJson, null, 2) + "\n");'
+
+      - name: Run tests
+        working-directory: npm
+        run: npm test
+
+      - name: Publish to npm next
+        working-directory: npm
+        run: npm publish --tag next --provenance

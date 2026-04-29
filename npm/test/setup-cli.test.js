@@ -41,7 +41,7 @@ async function writeFakeInstaller(bin, commandName, outputText) {
 }
 
 async function makeFixture() {
-  const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "potter-init-"));
+  const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "potter-setup-"));
   const home = path.join(root, "home");
   const xdg = path.join(root, "xdg");
   const bin = path.join(root, "bin");
@@ -127,7 +127,7 @@ test("lists available commands when no command is provided", async () => {
     assert.equal(result.signal, null);
     assert.equal(result.code, 0);
     assert.match(result.stdout, /Available commands:/);
-    assert.match(result.stdout, /init\s+Configure CodexPotter for \$loop\./);
+    assert.match(result.stdout, /setup\s+Configure CodexPotter for \$loop\./);
     assert.equal(result.stderr, "");
     assert.equal(fs.existsSync(fixture.npxLog), false);
   } finally {
@@ -135,11 +135,11 @@ test("lists available commands when no command is provided", async () => {
   }
 });
 
-test("init --yes writes files and pipes the loop skill installer", async () => {
+test("setup --yes writes files and pipes the loop skill installer", async () => {
   const fixture = await makeFixture();
 
   try {
-    const result = await runCli(fixture, ["init", "--yes"]);
+    const result = await runCli(fixture, ["setup", "--yes"]);
     const gitignorePath = path.join(fixture.xdg, "git", "ignore");
 
     assert.equal(result.signal, null);
@@ -150,7 +150,7 @@ test("init --yes writes files and pipes the loop skill installer", async () => {
     assert.match(result.stdout, /Todo: Install \/ update skill:/);
     assert.match(
       result.stdout,
-      /npx --yes skills add -g https:\/\/github\.com\/breezewish\/CodexPotter\/tree\/v2 -a codex/,
+      /npx --yes skills add --yes -g https:\/\/github\.com\/breezewish\/CodexPotter\/tree\/v2 -a codex/,
     );
     assert.match(
       result.stdout,
@@ -162,7 +162,7 @@ test("init --yes writes files and pipes the loop skill installer", async () => {
     assert.doesNotMatch(result.stdout, /Running loop skill installer/);
     assert.match(result.stdout, /fake npx skills installer/);
     assert.doesNotMatch(result.stdout, /✓ Skill added/);
-    assert.match(result.stdout, /✨ CodexPotter initialized!/);
+    assert.match(result.stdout, /✨ CodexPotter setup complete!/);
     assert.match(result.stdout, /Usage in Codex: \$loop <your_instruction>/);
     assert.equal(result.stderr, "");
 
@@ -181,18 +181,18 @@ test("init --yes writes files and pipes the loop skill installer", async () => {
 
     assert.equal(
       await fs.promises.readFile(fixture.npxLog, "utf8"),
-      "--yes\nskills\nadd\n-g\nhttps://github.com/breezewish/CodexPotter/tree/v2\n-a\ncodex\n",
+      "--yes\nskills\nadd\n--yes\n-g\nhttps://github.com/breezewish/CodexPotter/tree/v2\n-a\ncodex\n",
     );
   } finally {
     await cleanupFixture(fixture);
   }
 });
 
-test("init uses bunx for the skill installer when launched by Bun", async () => {
+test("setup uses bunx for the skill installer when launched by Bun", async () => {
   const fixture = await makeFixture();
 
   try {
-    const result = await runCli(fixture, ["init", "--yes"], {
+    const result = await runCli(fixture, ["setup", "--yes"], {
       env: {
         npm_config_user_agent: "bun/1.3.0",
         npm_execpath: path.join(fixture.bin, "bun"),
@@ -203,30 +203,30 @@ test("init uses bunx for the skill installer when launched by Bun", async () => 
     assert.equal(result.code, 0);
     assert.match(
       result.stdout,
-      /bunx skills add -g https:\/\/github\.com\/breezewish\/CodexPotter\/tree\/v2 -a codex/,
+      /bunx skills add --yes -g https:\/\/github\.com\/breezewish\/CodexPotter\/tree\/v2 -a codex/,
     );
     assert.doesNotMatch(result.stdout, /npx --yes skills add/);
     assert.match(result.stdout, /fake bunx skills installer/);
     assert.equal(result.stderr, "");
     assert.equal(
       await fs.promises.readFile(fixture.npxLog, "utf8"),
-      "skills\nadd\n-g\nhttps://github.com/breezewish/CodexPotter/tree/v2\n-a\ncodex\n",
+      "skills\nadd\n--yes\n-g\nhttps://github.com/breezewish/CodexPotter/tree/v2\n-a\ncodex\n",
     );
   } finally {
     await cleanupFixture(fixture);
   }
 });
 
-test("init waits for confirmation before writing files", async () => {
+test("setup waits for confirmation before writing files", async () => {
   const fixture = await makeFixture();
 
   try {
-    const result = await runCli(fixture, ["init"], { input: "\n" });
+    const result = await runCli(fixture, ["setup"], { input: "\n" });
 
     assert.equal(result.signal, null);
     assert.equal(result.code, 0);
     assert.match(result.stdout, /Continue\? ● Yes \/ ○ No/);
-    assert.match(result.stdout, /Initialization cancelled\./);
+    assert.match(result.stdout, /Setup cancelled\./);
     assert.equal(result.stderr, "");
 
     assert.equal(
@@ -245,16 +245,16 @@ test("init waits for confirmation before writing files", async () => {
   }
 });
 
-test("init treats closed stdin as cancellation", async () => {
+test("setup treats closed stdin as cancellation", async () => {
   const fixture = await makeFixture();
 
   try {
-    const result = await runCli(fixture, ["init"]);
+    const result = await runCli(fixture, ["setup"]);
 
     assert.equal(result.signal, null);
     assert.equal(result.code, 0);
     assert.match(result.stdout, /Continue\? ● Yes \/ ○ No/);
-    assert.match(result.stdout, /Initialization cancelled\./);
+    assert.match(result.stdout, /Setup cancelled\./);
     assert.equal(result.stderr, "");
     assert.equal(
       fs.existsSync(path.join(fixture.xdg, "git", "ignore")),
@@ -266,16 +266,16 @@ test("init treats closed stdin as cancellation", async () => {
   }
 });
 
-test("init accepts yes confirmation", async () => {
+test("setup accepts yes confirmation", async () => {
   const fixture = await makeFixture();
 
   try {
-    const result = await runCli(fixture, ["init"], { input: "yes\n" });
+    const result = await runCli(fixture, ["setup"], { input: "yes\n" });
 
     assert.equal(result.signal, null);
     assert.equal(result.code, 0);
     assert.match(result.stdout, /Continue\? ● Yes \/ ○ No/);
-    assert.match(result.stdout, /✨ CodexPotter initialized!/);
+    assert.match(result.stdout, /✨ CodexPotter setup complete!/);
     assert.equal(result.stderr, "");
 
     assert.equal(
@@ -284,18 +284,18 @@ test("init accepts yes confirmation", async () => {
     );
     assert.equal(
       await fs.promises.readFile(fixture.npxLog, "utf8"),
-      "--yes\nskills\nadd\n-g\nhttps://github.com/breezewish/CodexPotter/tree/v2\n-a\ncodex\n",
+      "--yes\nskills\nadd\n--yes\n-g\nhttps://github.com/breezewish/CodexPotter/tree/v2\n-a\ncodex\n",
     );
   } finally {
     await cleanupFixture(fixture);
   }
 });
 
-test("init colors confirmation choices when color is enabled", async () => {
+test("setup colors confirmation choices when color is enabled", async () => {
   const fixture = await makeFixture();
 
   try {
-    const result = await runCli(fixture, ["init"], {
+    const result = await runCli(fixture, ["setup"], {
       input: "n\n",
       env: {
         FORCE_COLOR: "1",
@@ -309,7 +309,7 @@ test("init colors confirmation choices when color is enabled", async () => {
       result.stdout,
       /\x1b\[32m●\x1b\[0m Yes\x1b\[2m \/ ○ No\x1b\[0m/,
     );
-    assert.match(result.stdout, /Initialization cancelled\./);
+    assert.match(result.stdout, /Setup cancelled\./);
     assert.equal(result.stderr, "");
     assert.equal(fs.existsSync(path.join(fixture.xdg, "git", "ignore")), false);
     assert.equal(fs.existsSync(fixture.npxLog), false);
@@ -318,7 +318,7 @@ test("init colors confirmation choices when color is enabled", async () => {
   }
 });
 
-test("init preserves global gitignore changes made during confirmation", async () => {
+test("setup preserves global gitignore changes made during confirmation", async () => {
   const fixture = await makeFixture();
 
   try {
@@ -326,7 +326,7 @@ test("init preserves global gitignore changes made during confirmation", async (
     await fs.promises.mkdir(path.dirname(gitignorePath), { recursive: true });
     await fs.promises.writeFile(gitignorePath, "before\n", "utf8");
 
-    const child = spawnCli(fixture, ["init"], "pipe");
+    const child = spawnCli(fixture, ["setup"], "pipe");
     let stdout = "";
     let stderr = "";
     let confirmed = false;
@@ -362,7 +362,7 @@ test("init preserves global gitignore changes made during confirmation", async (
   }
 });
 
-test("init --yes does not duplicate existing gitignore or profile content", async () => {
+test("setup --yes does not duplicate existing gitignore or profile content", async () => {
   const fixture = await makeFixture();
 
   try {
@@ -379,7 +379,7 @@ test("init --yes does not duplicate existing gitignore or profile content", asyn
     await fs.promises.mkdir(path.dirname(profilePath), { recursive: true });
     await fs.promises.copyFile(profileSourcePath, profilePath);
 
-    const result = await runCli(fixture, ["init", "--yes"]);
+    const result = await runCli(fixture, ["setup", "--yes"]);
 
     assert.equal(result.signal, null);
     assert.equal(result.code, 0);
@@ -395,7 +395,7 @@ test("init --yes does not duplicate existing gitignore or profile content", asyn
     assert.match(result.stdout, /Todo: Install \/ update skill:/);
     assert.match(
       result.stdout,
-      /npx --yes skills add -g https:\/\/github\.com\/breezewish\/CodexPotter\/tree\/v2 -a codex/,
+      /npx --yes skills add --yes -g https:\/\/github\.com\/breezewish\/CodexPotter\/tree\/v2 -a codex/,
     );
     assert.equal(result.stderr, "");
 
@@ -406,14 +406,14 @@ test("init --yes does not duplicate existing gitignore or profile content", asyn
     );
     assert.equal(
       await fs.promises.readFile(fixture.npxLog, "utf8"),
-      "--yes\nskills\nadd\n-g\nhttps://github.com/breezewish/CodexPotter/tree/v2\n-a\ncodex\n",
+      "--yes\nskills\nadd\n--yes\n-g\nhttps://github.com/breezewish/CodexPotter/tree/v2\n-a\ncodex\n",
     );
   } finally {
     await cleanupFixture(fixture);
   }
 });
 
-test("init colors plan status labels when color is enabled", async () => {
+test("setup colors plan status labels when color is enabled", async () => {
   const fixture = await makeFixture();
 
   try {
@@ -430,7 +430,7 @@ test("init colors plan status labels when color is enabled", async () => {
     await fs.promises.mkdir(path.dirname(profilePath), { recursive: true });
     await fs.promises.copyFile(profileSourcePath, profilePath);
 
-    const result = await runCli(fixture, ["init", "--yes"], {
+    const result = await runCli(fixture, ["setup", "--yes"], {
       env: {
         FORCE_COLOR: "1",
         NO_COLOR: "",
@@ -445,10 +445,10 @@ test("init colors plan status labels when color is enabled", async () => {
     assert.match(result.stdout, /\x1b\[2m.*potter_worker\.toml\x1b\[0m/);
     assert.match(
       result.stdout,
-      /\x1b\[36mnpx --yes skills add -g https:\/\/github\.com\/breezewish\/CodexPotter\/tree\/v2 -a codex\x1b\[0m/,
+      /\x1b\[36mnpx --yes skills add --yes -g https:\/\/github\.com\/breezewish\/CodexPotter\/tree\/v2 -a codex\x1b\[0m/,
     );
     assert.doesNotMatch(result.stdout, /✓ Skill added/);
-    assert.match(result.stdout, /\x1b\[32m✨ CodexPotter initialized!\x1b\[0m/);
+    assert.match(result.stdout, /\x1b\[32m✨ CodexPotter setup complete!\x1b\[0m/);
     assert.match(
       result.stdout,
       /\x1b\[1mUsage in Codex:\x1b\[0m \x1b\[36m\$loop\x1b\[0m <your_instruction>/,
@@ -459,7 +459,7 @@ test("init colors plan status labels when color is enabled", async () => {
   }
 });
 
-test("init uses configured core.excludesfile before the XDG default", async () => {
+test("setup uses configured core.excludesfile before the XDG default", async () => {
   const fixture = await makeFixture();
 
   try {
@@ -471,7 +471,7 @@ test("init uses configured core.excludesfile before the XDG default", async () =
     );
     await fs.promises.writeFile(configuredGitignorePath, "existing\n", "utf8");
 
-    const result = await runCli(fixture, ["init", "--yes"]);
+    const result = await runCli(fixture, ["setup", "--yes"]);
 
     assert.equal(result.signal, null);
     assert.equal(result.code, 0);

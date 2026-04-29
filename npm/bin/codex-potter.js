@@ -15,6 +15,8 @@ const LOOP_SKILL_COMMAND = [
   "add",
   "-g",
   "https://github.com/breezewish/CodexPotter/tree/v2",
+  "-a",
+  "codex",
 ];
 
 const colorEnabled = shouldUseColor();
@@ -114,9 +116,7 @@ async function runInit({ yes }) {
     skillInstaller,
   });
 
-  if (yes) {
-    console.log(format("Confirmation skipped because --yes was provided.", "dim"));
-  } else if (!(await confirm())) {
+  if (!yes && !(await confirm())) {
     console.log("Initialization cancelled.");
     return;
   }
@@ -124,22 +124,36 @@ async function runInit({ yes }) {
   if (gitignoreNeedsWrite) {
     const gitignoreUpdated = await ensureCodexPotterIgnored(globalGitignore.path);
     if (gitignoreUpdated) {
-      console.log(format("Global gitignore updated.", "green"));
+      console.log(
+        `${format("✓ Added", "green")} ${format(
+          CODEXPOTTER_GITIGNORE_ENTRY,
+          "dim",
+        )} to ${format(displayPath(globalGitignore.path), "dim")}`,
+      );
     }
   }
 
   if (profileNeedsWrite) {
     await fs.promises.mkdir(path.dirname(profilePath), { recursive: true });
     await fs.promises.writeFile(profilePath, profileContent, "utf8");
-    console.log(format("Subagent profile installed.", "green"));
+    console.log(
+      `${format("✓ Added", "green")} subagent profile ${format(
+        displayPath(profilePath),
+        "dim",
+      )}`,
+    );
   }
 
-  console.log(format("Running loop skill installer...", "cyan"));
   await runLoopSkillInstaller(skillInstaller);
 
   console.log("");
-  console.log(format("CodexPotter initialization complete.", "green"));
-  console.log(`Use it with: ${format("$loop <your_instruction>", "bold")}`);
+  console.log(format("✨ CodexPotter initialized!", "green"));
+  console.log(
+    `${format("Usage in Codex:", "bold")} ${format(
+      "$loop",
+      "cyan",
+    )} <your_instruction>`,
+  );
 }
 
 function printInitPlan({
@@ -176,11 +190,82 @@ function statusLabel(needsAction) {
 }
 
 async function confirm() {
+  if (process.stdin.isTTY && process.stdout.isTTY) {
+    return confirmInteractively();
+  }
+
+  return confirmFromLineInput();
+}
+
+async function confirmInteractively() {
+  return await new Promise((resolve) => {
+    let selected = true;
+    let settled = false;
+    const input = process.stdin;
+
+    const render = () => {
+      process.stdout.write(`\r\x1b[2K${confirmPrompt(selected)}`);
+    };
+
+    const settle = (value) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      input.off("keypress", onKeypress);
+      input.off("close", onClose);
+      input.off("end", onClose);
+      if (input.isTTY) {
+        input.setRawMode(false);
+      }
+      process.stdout.write("\n");
+      resolve(value);
+    };
+
+    const onClose = () => {
+      settle(false);
+    };
+
+    const onKeypress = (text, key = {}) => {
+      if (key.ctrl && key.name === "c") {
+        settle(false);
+      } else if (key.name === "return") {
+        settle(selected);
+      } else if (key.name === "escape") {
+        settle(false);
+      } else if (key.name === "left" || key.name === "up") {
+        selected = true;
+        render();
+      } else if (key.name === "right" || key.name === "down") {
+        selected = false;
+        render();
+      } else if (key.name === "tab" || text === " ") {
+        selected = !selected;
+        render();
+      } else if (text && text.toLowerCase() === "y") {
+        settle(true);
+      } else if (text && text.toLowerCase() === "n") {
+        settle(false);
+      }
+    };
+
+    readline.emitKeypressEvents(input);
+    input.on("keypress", onKeypress);
+    input.on("close", onClose);
+    input.on("end", onClose);
+    input.setRawMode(true);
+    input.resume();
+    render();
+  });
+}
+
+async function confirmFromLineInput() {
   const answer = await new Promise((resolve) => {
     let settled = false;
     const rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout,
+      terminal: false,
     });
 
     const settle = (value) => {
@@ -195,10 +280,20 @@ async function confirm() {
     rl.on("close", () => {
       settle("");
     });
-    rl.question("Continue? [y/N] ", settle);
+    rl.question(confirmPrompt(true), settle);
   });
 
   return /^(y|yes)$/i.test(String(answer).trim());
+}
+
+function confirmPrompt(yesSelected) {
+  const yes = yesSelected
+    ? `${format("●", "green")} Yes`
+    : format("○ Yes", "dim");
+  const no = yesSelected
+    ? format(" / ○ No", "dim")
+    : ` ${format("/", "dim")} ${format("●", "green")} No`;
+  return `Continue? ${yes}${no} `;
 }
 
 function resolveGlobalGitignore(home) {

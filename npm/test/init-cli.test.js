@@ -110,6 +110,10 @@ function gitConfigPathValue(filePath) {
   return filePath.split(path.sep).join("/");
 }
 
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 async function cleanupFixture(fixture) {
   await fs.promises.rm(fixture.root, { recursive: true, force: true });
 }
@@ -136,6 +140,7 @@ test("init --yes writes files and pipes the loop skill installer", async () => {
 
   try {
     const result = await runCli(fixture, ["init", "--yes"]);
+    const gitignorePath = path.join(fixture.xdg, "git", "ignore");
 
     assert.equal(result.signal, null);
     assert.equal(result.code, 0);
@@ -145,15 +150,22 @@ test("init --yes writes files and pipes the loop skill installer", async () => {
     assert.match(result.stdout, /Todo: Install \/ update skill:/);
     assert.match(
       result.stdout,
-      /npx --yes skills add -g https:\/\/github\.com\/breezewish\/CodexPotter\/tree\/v2/,
+      /npx --yes skills add -g https:\/\/github\.com\/breezewish\/CodexPotter\/tree\/v2 -a codex/,
     );
-    assert.match(result.stdout, /Subagent profile installed\./);
+    assert.match(
+      result.stdout,
+      new RegExp(`✓ Added \\/\\.codexpotter to ${escapeRegExp(gitignorePath)}`),
+    );
+    assert.doesNotMatch(result.stdout, /\(global gitignore file\)/);
+    assert.match(result.stdout, /✓ Added subagent profile .*potter_worker\.toml/);
+    assert.doesNotMatch(result.stdout, /Confirmation skipped/);
+    assert.doesNotMatch(result.stdout, /Running loop skill installer/);
     assert.match(result.stdout, /fake npx skills installer/);
-    assert.match(result.stdout, /CodexPotter initialization complete\./);
-    assert.match(result.stdout, /\$loop <your_instruction>/);
+    assert.doesNotMatch(result.stdout, /✓ Skill added/);
+    assert.match(result.stdout, /✨ CodexPotter initialized!/);
+    assert.match(result.stdout, /Usage in Codex: \$loop <your_instruction>/);
     assert.equal(result.stderr, "");
 
-    const gitignorePath = path.join(fixture.xdg, "git", "ignore");
     assert.equal(await fs.promises.readFile(gitignorePath, "utf8"), "/.codexpotter\n");
 
     const profilePath = path.join(
@@ -169,7 +181,7 @@ test("init --yes writes files and pipes the loop skill installer", async () => {
 
     assert.equal(
       await fs.promises.readFile(fixture.npxLog, "utf8"),
-      "--yes\nskills\nadd\n-g\nhttps://github.com/breezewish/CodexPotter/tree/v2\n",
+      "--yes\nskills\nadd\n-g\nhttps://github.com/breezewish/CodexPotter/tree/v2\n-a\ncodex\n",
     );
   } finally {
     await cleanupFixture(fixture);
@@ -191,14 +203,14 @@ test("init uses bunx for the skill installer when launched by Bun", async () => 
     assert.equal(result.code, 0);
     assert.match(
       result.stdout,
-      /bunx skills add -g https:\/\/github\.com\/breezewish\/CodexPotter\/tree\/v2/,
+      /bunx skills add -g https:\/\/github\.com\/breezewish\/CodexPotter\/tree\/v2 -a codex/,
     );
     assert.doesNotMatch(result.stdout, /npx --yes skills add/);
     assert.match(result.stdout, /fake bunx skills installer/);
     assert.equal(result.stderr, "");
     assert.equal(
       await fs.promises.readFile(fixture.npxLog, "utf8"),
-      "skills\nadd\n-g\nhttps://github.com/breezewish/CodexPotter/tree/v2\n",
+      "skills\nadd\n-g\nhttps://github.com/breezewish/CodexPotter/tree/v2\n-a\ncodex\n",
     );
   } finally {
     await cleanupFixture(fixture);
@@ -213,7 +225,7 @@ test("init waits for confirmation before writing files", async () => {
 
     assert.equal(result.signal, null);
     assert.equal(result.code, 0);
-    assert.match(result.stdout, /Continue\? \[y\/N\]/);
+    assert.match(result.stdout, /Continue\? ● Yes \/ ○ No/);
     assert.match(result.stdout, /Initialization cancelled\./);
     assert.equal(result.stderr, "");
 
@@ -241,7 +253,7 @@ test("init treats closed stdin as cancellation", async () => {
 
     assert.equal(result.signal, null);
     assert.equal(result.code, 0);
-    assert.match(result.stdout, /Continue\? \[y\/N\]/);
+    assert.match(result.stdout, /Continue\? ● Yes \/ ○ No/);
     assert.match(result.stdout, /Initialization cancelled\./);
     assert.equal(result.stderr, "");
     assert.equal(
@@ -262,8 +274,8 @@ test("init accepts yes confirmation", async () => {
 
     assert.equal(result.signal, null);
     assert.equal(result.code, 0);
-    assert.match(result.stdout, /Continue\? \[y\/N\]/);
-    assert.match(result.stdout, /CodexPotter initialization complete\./);
+    assert.match(result.stdout, /Continue\? ● Yes \/ ○ No/);
+    assert.match(result.stdout, /✨ CodexPotter initialized!/);
     assert.equal(result.stderr, "");
 
     assert.equal(
@@ -272,8 +284,35 @@ test("init accepts yes confirmation", async () => {
     );
     assert.equal(
       await fs.promises.readFile(fixture.npxLog, "utf8"),
-      "--yes\nskills\nadd\n-g\nhttps://github.com/breezewish/CodexPotter/tree/v2\n",
+      "--yes\nskills\nadd\n-g\nhttps://github.com/breezewish/CodexPotter/tree/v2\n-a\ncodex\n",
     );
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test("init colors confirmation choices when color is enabled", async () => {
+  const fixture = await makeFixture();
+
+  try {
+    const result = await runCli(fixture, ["init"], {
+      input: "n\n",
+      env: {
+        FORCE_COLOR: "1",
+        NO_COLOR: "",
+      },
+    });
+
+    assert.equal(result.signal, null);
+    assert.equal(result.code, 0);
+    assert.match(
+      result.stdout,
+      /\x1b\[32m●\x1b\[0m Yes\x1b\[2m \/ ○ No\x1b\[0m/,
+    );
+    assert.match(result.stdout, /Initialization cancelled\./);
+    assert.equal(result.stderr, "");
+    assert.equal(fs.existsSync(path.join(fixture.xdg, "git", "ignore")), false);
+    assert.equal(fs.existsSync(fixture.npxLog), false);
   } finally {
     await cleanupFixture(fixture);
   }
@@ -294,7 +333,7 @@ test("init preserves global gitignore changes made during confirmation", async (
 
     child.stdout.on("data", (chunk) => {
       stdout += chunk.toString("utf8");
-      if (!confirmed && stdout.includes("Continue? [y/N]")) {
+      if (!confirmed && stdout.includes("Continue? ● Yes / ○ No")) {
         confirmed = true;
         fs.writeFileSync(gitignorePath, "before\nduring\n", "utf8");
         child.stdin.end("yes\n");
@@ -309,7 +348,10 @@ test("init preserves global gitignore changes made during confirmation", async (
     assert.equal(confirmed, true);
     assert.equal(signal, null);
     assert.equal(code, 0);
-    assert.match(stdout, /Global gitignore updated\./);
+    assert.match(
+      stdout,
+      new RegExp(`✓ Added \\/\\.codexpotter to ${escapeRegExp(gitignorePath)}`),
+    );
     assert.equal(stderr, "");
     assert.equal(
       await fs.promises.readFile(gitignorePath, "utf8"),
@@ -347,10 +389,13 @@ test("init --yes does not duplicate existing gitignore or profile content", asyn
     assert.doesNotMatch(result.stdout, /already up to date \(/);
     assert.doesNotMatch(result.stdout, /Global gitignore already configured\./);
     assert.doesNotMatch(result.stdout, /Subagent profile already up to date\./);
+    assert.doesNotMatch(result.stdout, /Global gitignore updated\./);
+    assert.doesNotMatch(result.stdout, /Subagent profile installed\./);
+    assert.doesNotMatch(result.stdout, /Running loop skill installer/);
     assert.match(result.stdout, /Todo: Install \/ update skill:/);
     assert.match(
       result.stdout,
-      /npx --yes skills add -g https:\/\/github\.com\/breezewish\/CodexPotter\/tree\/v2/,
+      /npx --yes skills add -g https:\/\/github\.com\/breezewish\/CodexPotter\/tree\/v2 -a codex/,
     );
     assert.equal(result.stderr, "");
 
@@ -361,7 +406,7 @@ test("init --yes does not duplicate existing gitignore or profile content", asyn
     );
     assert.equal(
       await fs.promises.readFile(fixture.npxLog, "utf8"),
-      "--yes\nskills\nadd\n-g\nhttps://github.com/breezewish/CodexPotter/tree/v2\n",
+      "--yes\nskills\nadd\n-g\nhttps://github.com/breezewish/CodexPotter/tree/v2\n-a\ncodex\n",
     );
   } finally {
     await cleanupFixture(fixture);
@@ -400,7 +445,13 @@ test("init colors plan status labels when color is enabled", async () => {
     assert.match(result.stdout, /\x1b\[2m.*potter_worker\.toml\x1b\[0m/);
     assert.match(
       result.stdout,
-      /\x1b\[36mnpx --yes skills add -g https:\/\/github\.com\/breezewish\/CodexPotter\/tree\/v2\x1b\[0m/,
+      /\x1b\[36mnpx --yes skills add -g https:\/\/github\.com\/breezewish\/CodexPotter\/tree\/v2 -a codex\x1b\[0m/,
+    );
+    assert.doesNotMatch(result.stdout, /✓ Skill added/);
+    assert.match(result.stdout, /\x1b\[32m✨ CodexPotter initialized!\x1b\[0m/);
+    assert.match(
+      result.stdout,
+      /\x1b\[1mUsage in Codex:\x1b\[0m \x1b\[36m\$loop\x1b\[0m <your_instruction>/,
     );
     assert.equal(result.stderr, "");
   } finally {
@@ -425,6 +476,12 @@ test("init uses configured core.excludesfile before the XDG default", async () =
     assert.equal(result.signal, null);
     assert.equal(result.code, 0);
     assert.match(result.stdout, /Todo: Ignore \/.codexpotter in global gitignore/);
+    assert.match(
+      result.stdout,
+      new RegExp(
+        `✓ Added \\/\\.codexpotter to ${escapeRegExp(path.join("~", "custom-ignore"))}`,
+      ),
+    );
     assert.equal(result.stderr, "");
 
     assert.equal(

@@ -58,7 +58,16 @@ For agents: This file is carefully maintained and polished for better readabilit
 
 &ensp;
 
+To learn more, see details below:
+
+- [Skill File](./skills/loop/SKILL.md) - used when $loop
+- [Workflow Instruction](./npm/resources/potter_worker.toml) - used by subagents spawned from $loop
+
+&ensp;
+
 ## ⚡️ Getting started
+
+**Codex Desktop Users:**
 
 1. Use the all-in-one wizard, it helps you set up gitignore, subagent definitions and skills _globally_:
 
@@ -73,6 +82,18 @@ $loop Implement /ps endpoint according to docs/ps_design.md
 ```
 
 &ensp;
+
+
+**Codex CLI Users:**
+
+If you prefer CLI, we recommend to [use the V1 version](https://github.com/breezewish/CodexPotter):
+
+- Same prompt, same result quality.
+- Standalone CLI utility for **denoised experience**.
+- Good for CLI and agent call usage (invoked by other agents).
+
+&ensp;
+
 
 ## Tips
 

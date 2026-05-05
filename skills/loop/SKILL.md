@@ -84,7 +84,7 @@ Run at most 6 rounds by default (user can change via --rounds N). In each round,
    Work according to this handoff file: <path to handoff md file>
    ```
 
-3. Wait for the subagent to finish.
+3. Wait for the subagent to finish. Subagent may take long time (e.g. 30 minutes). Wait patiently, do not timeout or interrupt it.
 4. Report last subagent message, keep it unchanged.
 5. Read handoff file, stop if the frontmatter contains the literal value `finite_incantatem: true`
 

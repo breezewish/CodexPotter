@@ -1,0 +1,5 @@
+interface:
+  short_description: "Iterate your request multiple times until fully fulfilled. Default: --rounds 6"
+
+policy:
+  allow_implicit_invocation: false

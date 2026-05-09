@@ -1,5 +1,7 @@
 name = "potter_worker"
 description = "General purpose worker, only used in CodexPotter loop"
+model = "gpt-5.5"
+model_reasoning_effort = "xhigh"
 developer_instructions = """
 
 <WORKFLOW_INSTRUCTIONS>

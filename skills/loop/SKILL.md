@@ -85,8 +85,9 @@ Run at most 6 rounds by default (user can change via --rounds N). In each round,
    ```
 
 3. Wait for the subagent to finish. Subagent may take long time (e.g. 30 minutes). Wait patiently, do not timeout or interrupt it.
-4. Report last subagent message, keep it unchanged.
-5. Read handoff file, stop if the frontmatter contains the literal value `finite_incantatem: true`
+4. Close the subagent after it finishes.
+5. Report last subagent message, keep it unchanged.
+6. Read handoff file, stop if the frontmatter contains the literal value `finite_incantatem: true`
 
 If potter_worker agent is not available:
   This is a critical issue. Fail fast, do not use other alternative agents.
@@ -101,14 +102,14 @@ If `finite_incantatem` is not true after a round and there are more rounds left:
 
 ## 4. Final Report
 
-After the loop stops, report these to user (using bullet points):
+After the loop stops, report these info to user:
 
 - Total rounds run.
 - State (one of):
   - round limit reached
   - finished (when finite_incantatem==true)
 - git hash change (if available) (xxxxxx -> xxxxxx).
-- Last subagent messages of each round, which is the work summary. Keep it unchanged.
+- Last subagent messages of each round, which is the work summary. Keep details.
 - Overall summary (according to last subagent messages in all rounds).
 
 Do not add implementation analysis, code review, extra verification, or recommendations beyond the loop outcome.
@@ -124,9 +125,9 @@ If what user passed in is an existing handoff file to resume (iterate more round
 
 If current loop was paused / interrupted and user wants to continue, you could simply send `continue` prompt to the subagent.
 
-## Feedback Principles
+## Feedback / Report Principles
 
-- Keep concise and structured way.
-- Before start the loop, tell user: how many rounds to run, handoff file path (using bullet points).
+- Keep concise, structured, readable.
+- Before start the loop, tell user how many rounds to run, handoff file path.
 - Do not mention this control flow details like "finite_incantatem", etc. User only know "rounds", "handoff file".
 - Feedback using the same language as user request.

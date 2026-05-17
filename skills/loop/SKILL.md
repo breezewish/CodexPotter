@@ -15,7 +15,6 @@ When working in this pattern, subagents own all task execution, you are the orch
 Control parameters:
 
 - rounds=N (default 6): maximum rounds to run
-- xmodel: enable cross-model mode or not
 
 ## 1. Prepare handoff
 
@@ -139,29 +138,6 @@ If current loop was paused / interrupted and user wants to continue, you could s
 When subagent fails or encounters an error, resume it by simply sending a `continue` prompt. Retry several times if it keeps failing.
 This resumes the subagent with same working knowledge, ensures maximum continuity.
 As the last resort, close the subagent and start a new one.
-
-## Cross Model Mode (xmodel)
-
-When xmodel is enabled (--xmodel), explicitly specify the model when spawning subagents:
-
-- Rounds 1~3: use model `gpt-5.2` with reasoning effort `xhigh`
-- Rounds 4+: use model `gpt-5.5` with reasoning effort `xhigh`
-
-Always ensure at least one round uses `gpt-5.5` in xmodel mode:
-
-- If `finite_incantatem` is reached before round 4, reset `finite_incantatem` to `false`, reset `status` to `open`,
-  then start a new round with `gpt-5.5` (and all following rounds use `gpt-5.5` as well).
-
-### When to use xmodel
-
-By default xmodel is not used, unless:
-
-- User explicitly requests --xmodel
-- Task is a coding task with a clear plan or spec to follow
-- Task is to review or improve an existing coding document / spec / plan
-
-Anyway, avoid using xmodel for creative or vague tasks, or tasks that requires heavy ops work.
-Xmodel is beneficial in case of strong codebase understanding, exploring, or reasoning.
 
 ## Feedback / Report Principles
 

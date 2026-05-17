@@ -12,9 +12,14 @@ When working in this pattern, subagents own all task execution, you are the orch
 - Do only the control actions this skill explicitly requires.
 - Do NOT implement, review, fix issues, run checks, inspect repository.
 
+Control parameters:
+
+- rounds=N (default 6): maximum rounds to run
+- xmodel: enable cross-model mode or not
+
 ## 1. Prepare handoff
 
-Build a concise `initial_prompt` for the next LLM. Include user's request and context from previous conversation; do not inspect the repository to enrich it.
+Build a concise `initial_prompt` for the next LLM. Include user's request and context from current conversation; do not inspect the repository to enrich it.
 
 Structure `initial_prompt` with these sections:
 
@@ -25,14 +30,18 @@ Structure `initial_prompt` with these sections:
 
 ## Important Context, Constraints, and User Preferences
 
-<Supplied from previous conversation, if user's request is not self-contained.>
+<Supplied from current conversation, if user's request is not self-contained.>
 
 ## Critical Data, Examples, and References
 
-<Supplied from previous conversation, if user's request is not self-contained.>
+<Supplied from current conversation, if user's request is not self-contained.>
 ```
 
+Next LLM knows nothing about the current conversation - not even what user said or you previously said.
+Thus, make sure initial_prompt is self-contained, including all necessary context to work on the task.
+
 Keep it concise, structured, and focused on helping the next LLM seamlessly continue the work.
+Do not make up context or details. Do not enhance the initial_prompt with your own analysis, assumptions or deductions.
 
 `$loop` control flow instructions MUST BE EXCLUDED in `initial_prompt`, otherwise subagent will loop again.
 Other skills like $xxx should be kept as is if they are part of the user request.
@@ -84,7 +93,7 @@ Run at most 6 rounds by default (user can change via --rounds N). In each round,
    Work according to this handoff file: <path to handoff md file>
    ```
 
-3. Wait for the subagent to finish. Subagent may take long time (e.g. 30 minutes). Wait patiently, do not timeout or interrupt it.
+3. Wait for the subagent to finish. Subagent may take long time (e.g. 3 hours). Wait patiently, do not timeout or interrupt it.
 4. Close the subagent after it finishes.
 5. Report last subagent message, keep it unchanged.
 6. Read handoff file, stop if the frontmatter contains the literal value `finite_incantatem: true`
@@ -124,6 +133,35 @@ If what user passed in is an existing handoff file to resume (iterate more round
 ## How to continue
 
 If current loop was paused / interrupted and user wants to continue, you could simply send `continue` prompt to the subagent.
+
+## Error Handling
+
+When subagent fails or encounters an error, resume it by simply sending a `continue` prompt. Retry several times if it keeps failing.
+This resumes the subagent with same working knowledge, ensures maximum continuity.
+As the last resort, close the subagent and start a new one.
+
+## Cross Model Mode (xmodel)
+
+When xmodel is enabled (--xmodel), explicitly specify the model when spawning subagents:
+
+- Rounds 1~3: use model `gpt-5.2` with reasoning effort `xhigh`
+- Rounds 4+: use model `gpt-5.5` with reasoning effort `xhigh`
+
+Always ensure at least one round uses `gpt-5.5` in xmodel mode:
+
+- If `finite_incantatem` is reached before round 4, reset `finite_incantatem` to `false`, reset `status` to `open`,
+  then start a new round with `gpt-5.5` (and all following rounds use `gpt-5.5` as well).
+
+### When to use xmodel
+
+By default xmodel is not used, unless:
+
+- User explicitly requests --xmodel
+- Task is a coding task with a clear plan or spec to follow
+- Task is to review or improve an existing coding document / spec / plan
+
+Anyway, avoid using xmodel for creative or vague tasks, or tasks that requires heavy ops work.
+Xmodel is beneficial in case of strong codebase understanding, exploring, or reasoning.
 
 ## Feedback / Report Principles
 

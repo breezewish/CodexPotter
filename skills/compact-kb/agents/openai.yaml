@@ -1,0 +1,5 @@
+interface:
+  short_description: "Compact CodexPotter's knowledge base"
+
+policy:
+  allow_implicit_invocation: false

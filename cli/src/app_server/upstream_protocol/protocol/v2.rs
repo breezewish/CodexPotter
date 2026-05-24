@@ -101,6 +101,19 @@ fn upstream_http_status_code(value: JsonValue) -> Option<u16> {
         .and_then(|status| u16::try_from(status).ok())
 }
 
+/// Lossily map upstream response-side service tier ids into Potter's internal model.
+///
+/// Upstream `thread/*` responses preserve raw tier ids such as `"priority"` or `"default"`.
+/// Potter only models `fast` and `flex` internally, so callers should use this helper at the
+/// boundary where raw response metadata becomes local session state.
+pub fn upstream_response_service_tier_to_internal(value: &str) -> Option<ServiceTier> {
+    match value {
+        "fast" | "priority" => Some(ServiceTier::Fast),
+        "flex" => Some(ServiceTier::Flex),
+        _ => None,
+    }
+}
+
 /// Upstream approval policy for agent tool executions.
 ///
 /// CodexPotter typically sets this to [`AskForApproval::Never`] and handles any "approval"-like
@@ -753,7 +766,7 @@ pub struct ThreadStartResponse {
     pub thread: Thread,
     pub model: String,
     pub model_provider: String,
-    pub service_tier: Option<ServiceTier>,
+    pub service_tier: Option<String>,
     pub cwd: PathBuf,
     #[serde(default)]
     pub instruction_sources: Vec<AbsolutePathBuf>,
@@ -797,7 +810,7 @@ pub struct ThreadResumeResponse {
     pub thread: Thread,
     pub model: String,
     pub model_provider: String,
-    pub service_tier: Option<ServiceTier>,
+    pub service_tier: Option<String>,
     pub cwd: PathBuf,
     #[serde(default)]
     pub instruction_sources: Vec<AbsolutePathBuf>,
@@ -1532,7 +1545,6 @@ mod tests {
     use super::TurnError;
     use super::TurnStartParams;
     use super::TurnStatus;
-
     #[test]
     fn turn_error_handles_supported_and_unknown_upstream_codex_error_info_shapes() {
         struct Case {
@@ -1711,6 +1723,83 @@ mod tests {
 
         assert_eq!(response.approvals_reviewer, ApprovalsReviewer::AutoReview);
         assert_eq!(response.permission_profile, None);
+    }
+
+    #[test]
+    fn thread_start_response_preserves_default_service_tier() {
+        let response: ThreadStartResponse = serde_json::from_value(json!({
+            "thread": {
+                "id": "thread-1"
+            },
+            "model": "gpt-5.4",
+            "modelProvider": "openai",
+            "serviceTier": "default",
+            "cwd": "/tmp/worktree",
+            "instructionSources": [],
+            "approvalPolicy": "never",
+            "approvalsReviewer": "user",
+            "sandbox": {
+                "type": "dangerFullAccess"
+            },
+            "permissionProfile": null,
+            "reasoningEffort": "high",
+            "activePermissionProfile": null,
+            "runtimeWorkspaceRoots": ["/tmp/worktree"]
+        }))
+        .expect("deserialize thread/start response with default service tier");
+
+        assert_eq!(response.service_tier, Some("default".to_string()));
+    }
+
+    #[test]
+    fn thread_resume_response_preserves_priority_service_tier() {
+        let response: ThreadResumeResponse = serde_json::from_value(json!({
+            "thread": {
+                "id": "thread-1"
+            },
+            "model": "gpt-5.4",
+            "modelProvider": "openai",
+            "serviceTier": "priority",
+            "cwd": "/tmp/worktree",
+            "instructionSources": [],
+            "approvalPolicy": "never",
+            "approvalsReviewer": "user",
+            "sandbox": {
+                "type": "dangerFullAccess"
+            },
+            "permissionProfile": null,
+            "reasoningEffort": null
+        }))
+        .expect("deserialize thread/resume response with priority service tier");
+
+        assert_eq!(response.service_tier, Some("priority".to_string()));
+    }
+
+    #[test]
+    fn thread_resume_response_preserves_unknown_service_tier() {
+        let response: ThreadResumeResponse = serde_json::from_value(json!({
+            "thread": {
+                "id": "thread-1"
+            },
+            "model": "gpt-5.4",
+            "modelProvider": "openai",
+            "serviceTier": "experimental-tier-id",
+            "cwd": "/tmp/worktree",
+            "instructionSources": [],
+            "approvalPolicy": "never",
+            "approvalsReviewer": "user",
+            "sandbox": {
+                "type": "dangerFullAccess"
+            },
+            "permissionProfile": null,
+            "reasoningEffort": null
+        }))
+        .expect("deserialize thread/resume response with unknown service tier");
+
+        assert_eq!(
+            response.service_tier,
+            Some("experimental-tier-id".to_string())
+        );
     }
 
     #[test]

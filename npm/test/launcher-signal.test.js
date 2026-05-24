@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const repoRoot = path.resolve(__dirname, "..", "..");
 
 function currentTargetTriple() {
   const { platform, arch } = process;
@@ -89,8 +90,25 @@ async function waitForSubstring(stream, substring, timeoutMs) {
 }
 
 function launcherSourcePath() {
-  const repoRoot = path.resolve(__dirname, "..", "..");
   return path.join(repoRoot, "npm", "bin", "codex-potter.js");
+}
+
+function launcherPackageJsonSourcePath() {
+  return path.join(repoRoot, "npm", "package.json");
+}
+
+async function stageLauncherPackage(tmp) {
+  const launcherDir = path.join(tmp, "bin");
+  const launcherPath = path.join(launcherDir, "codex-potter.js");
+
+  await fs.promises.mkdir(launcherDir, { recursive: true });
+  await fs.promises.copyFile(launcherSourcePath(), launcherPath);
+  await fs.promises.copyFile(
+    launcherPackageJsonSourcePath(),
+    path.join(tmp, "package.json"),
+  );
+
+  return launcherPath;
 }
 
 test(
@@ -101,11 +119,7 @@ test(
     let launcherProcess = null;
 
     try {
-      const launcherDir = path.join(tmp, "bin");
-      const launcherPath = path.join(launcherDir, "codex-potter.js");
-
-      await fs.promises.mkdir(launcherDir, { recursive: true });
-      await fs.promises.copyFile(launcherSourcePath(), launcherPath);
+      const launcherPath = await stageLauncherPackage(tmp);
 
       launcherProcess = spawn(process.execPath, [launcherPath], {
         stdio: ["ignore", "pipe", "pipe"],
@@ -157,8 +171,7 @@ test(
 
     try {
       const triple = currentTargetTriple();
-      const launcherDir = path.join(tmp, "bin");
-      const launcherPath = path.join(launcherDir, "codex-potter.js");
+      const launcherPath = await stageLauncherPackage(tmp);
       const vendorBinaryDir = path.join(
         tmp,
         "vendor",
@@ -167,10 +180,7 @@ test(
       );
       const vendorBinaryPath = path.join(vendorBinaryDir, "codex-potter");
 
-      await fs.promises.mkdir(launcherDir, { recursive: true });
       await fs.promises.mkdir(vendorBinaryDir, { recursive: true });
-
-      await fs.promises.copyFile(launcherSourcePath(), launcherPath);
 
       await fs.promises.writeFile(
         vendorBinaryPath,
@@ -241,8 +251,7 @@ test(
 
     try {
       const triple = currentTargetTriple();
-      const launcherDir = path.join(tmp, "bin");
-      const launcherPath = path.join(launcherDir, "codex-potter.js");
+      const launcherPath = await stageLauncherPackage(tmp);
       const vendorBinaryDir = path.join(
         tmp,
         "vendor",
@@ -251,10 +260,7 @@ test(
       );
       const vendorBinaryPath = path.join(vendorBinaryDir, "codex-potter");
 
-      await fs.promises.mkdir(launcherDir, { recursive: true });
       await fs.promises.mkdir(vendorBinaryDir, { recursive: true });
-
-      await fs.promises.copyFile(launcherSourcePath(), launcherPath);
 
       await fs.promises.writeFile(
         vendorBinaryPath,

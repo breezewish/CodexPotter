@@ -17,6 +17,8 @@ use codex_protocol::ThreadId;
 use codex_protocol::protocol::ServiceTier;
 use codex_protocol::protocol::SessionConfiguredEvent;
 
+use crate::app_server::upstream_protocol::service_tier_from_value;
+
 /// Resolve a recorded upstream rollout path against the original project working directory.
 pub fn resolve_rollout_path_for_replay(workdir: &Path, rollout_path: &Path) -> PathBuf {
     if rollout_path.is_absolute() {
@@ -119,7 +121,7 @@ fn read_rollout_context_snapshot(
                 if service_tier.is_none()
                     && let Some(v) = payload.get("service_tier")
                 {
-                    service_tier = serde_json::from_value::<ServiceTier>(v.clone()).ok();
+                    service_tier = service_tier_from_value(v);
                 }
             }
             _ => {}
@@ -204,5 +206,28 @@ mod tests {
         .expect("session configured");
 
         assert_eq!(cfg.service_tier, Some(ServiceTier::Flex));
+    }
+
+    #[test]
+    fn synthesize_session_configured_event_ignores_default_snapshot_service_tier() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let rollout_path = temp.path().join("rollout.jsonl");
+        std::fs::write(
+            &rollout_path,
+            r#"{"timestamp":"2026-02-28T00:00:00.000Z","type":"turn_context","payload":{"cwd":"project","approval_policy":"never","sandbox_policy":{"type":"read_only"},"model":"test-model","summary":{"type":"auto"},"output_schema":null}}
+{"timestamp":"2026-02-28T00:00:01.000Z","type":"session_meta","payload":{"model_provider":"openai","service_tier":"default"}}
+"#,
+        )
+        .expect("write rollout");
+
+        let cfg = synthesize_session_configured_event(
+            ThreadId::from_string("019ca423-63d9-7641-ae83-db060ad3c000").expect("thread id"),
+            None,
+            rollout_path,
+        )
+        .expect("synthesize")
+        .expect("session configured");
+
+        assert_eq!(cfg.service_tier, None);
     }
 }

@@ -101,6 +101,26 @@ fn upstream_http_status_code(value: JsonValue) -> Option<u16> {
         .and_then(|status| u16::try_from(status).ok())
 }
 
+/// Decode an upstream response service tier while tolerating values Potter does not model
+/// explicitly.
+///
+/// Current Codex builds can return `"default"` in thread metadata. Potter only has distinct UX
+/// for `fast` and `flex`, so anything else should degrade to `None` instead of failing the whole
+/// response decode.
+pub fn service_tier_from_value(value: &JsonValue) -> Option<ServiceTier> {
+    serde_json::from_value::<ServiceTier>(value.clone()).ok()
+}
+
+fn deserialize_response_service_tier_opt<'de, D>(
+    deserializer: D,
+) -> Result<Option<ServiceTier>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<JsonValue>::deserialize(deserializer)?;
+    Ok(value.as_ref().and_then(service_tier_from_value))
+}
+
 /// Upstream approval policy for agent tool executions.
 ///
 /// CodexPotter typically sets this to [`AskForApproval::Never`] and handles any "approval"-like
@@ -753,6 +773,7 @@ pub struct ThreadStartResponse {
     pub thread: Thread,
     pub model: String,
     pub model_provider: String,
+    #[serde(default, deserialize_with = "deserialize_response_service_tier_opt")]
     pub service_tier: Option<ServiceTier>,
     pub cwd: PathBuf,
     #[serde(default)]
@@ -797,6 +818,7 @@ pub struct ThreadResumeResponse {
     pub thread: Thread,
     pub model: String,
     pub model_provider: String,
+    #[serde(default, deserialize_with = "deserialize_response_service_tier_opt")]
     pub service_tier: Option<ServiceTier>,
     pub cwd: PathBuf,
     #[serde(default)]
@@ -1711,6 +1733,32 @@ mod tests {
 
         assert_eq!(response.approvals_reviewer, ApprovalsReviewer::AutoReview);
         assert_eq!(response.permission_profile, None);
+    }
+
+    #[test]
+    fn thread_start_response_tolerates_default_service_tier() {
+        let response: ThreadStartResponse = serde_json::from_value(json!({
+            "thread": {
+                "id": "thread-1"
+            },
+            "model": "gpt-5.4",
+            "modelProvider": "openai",
+            "serviceTier": "default",
+            "cwd": "/tmp/worktree",
+            "instructionSources": [],
+            "approvalPolicy": "never",
+            "approvalsReviewer": "user",
+            "sandbox": {
+                "type": "dangerFullAccess"
+            },
+            "permissionProfile": null,
+            "reasoningEffort": "high",
+            "activePermissionProfile": null,
+            "runtimeWorkspaceRoots": ["/tmp/worktree"]
+        }))
+        .expect("deserialize thread/start response with default service tier");
+
+        assert_eq!(response.service_tier, None);
     }
 
     #[test]

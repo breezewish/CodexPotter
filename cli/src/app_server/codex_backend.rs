@@ -2900,16 +2900,12 @@ impl ThreadStartOrResume {
     }
 
     fn service_tier(&self) -> Option<ServiceTier> {
-        match self {
-            ThreadStartOrResume::Start(resp) => resp
-                .service_tier
-                .as_deref()
-                .and_then(upstream_response_service_tier_to_internal),
-            ThreadStartOrResume::Resume(resp) => resp
-                .service_tier
-                .as_deref()
-                .and_then(upstream_response_service_tier_to_internal),
-        }
+        let service_tier = match self {
+            ThreadStartOrResume::Start(resp) => resp.service_tier.as_deref(),
+            ThreadStartOrResume::Resume(resp) => resp.service_tier.as_deref(),
+        };
+
+        service_tier.and_then(upstream_response_service_tier_to_internal)
     }
 
     fn cwd(&self) -> &Path {
@@ -2985,6 +2981,32 @@ mod session_configured_tests {
         .expect("deserialize thread/start response with priority service tier");
 
         let response = ThreadStartOrResume::Start(response);
+
+        assert_eq!(response.service_tier(), Some(ServiceTier::Fast));
+    }
+
+    #[test]
+    fn thread_start_or_resume_maps_priority_response_service_tier_to_fast_on_resume() {
+        let response: ThreadResumeResponse = serde_json::from_value(json!({
+            "thread": {
+                "id": "thread-1"
+            },
+            "model": "gpt-5.4",
+            "modelProvider": "openai",
+            "serviceTier": "priority",
+            "cwd": "/tmp/worktree",
+            "instructionSources": [],
+            "approvalPolicy": "never",
+            "approvalsReviewer": "user",
+            "sandbox": {
+                "type": "dangerFullAccess"
+            },
+            "permissionProfile": null,
+            "reasoningEffort": "high"
+        }))
+        .expect("deserialize thread/resume response with priority service tier");
+
+        let response = ThreadStartOrResume::Resume(response);
 
         assert_eq!(response.service_tier(), Some(ServiceTier::Fast));
     }

@@ -108,6 +108,7 @@ use crate::app_server::upstream_protocol::TurnStartParams;
 use crate::app_server::upstream_protocol::TurnStartedNotification as UpstreamTurnStartedNotification;
 use crate::app_server::upstream_protocol::TurnStatus as UpstreamTurnStatus;
 use crate::app_server::upstream_protocol::UserInput as ApiUserInput;
+use crate::app_server::upstream_protocol::upstream_response_service_tier_to_internal;
 use anyhow::Context;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::ElicitationRequest as ProtocolElicitationRequest;
@@ -2902,12 +2903,12 @@ impl ThreadStartOrResume {
         match self {
             ThreadStartOrResume::Start(resp) => resp
                 .service_tier
-                .as_ref()
-                .and_then(|tier| tier.as_service_tier()),
+                .as_deref()
+                .and_then(upstream_response_service_tier_to_internal),
             ThreadStartOrResume::Resume(resp) => resp
                 .service_tier
-                .as_ref()
-                .and_then(|tier| tier.as_service_tier()),
+                .as_deref()
+                .and_then(upstream_response_service_tier_to_internal),
         }
     }
 
@@ -2951,6 +2952,42 @@ fn next_request_id(next_id: &mut i64) -> RequestId {
 /// Real measured round durations therefore round up to at least one second.
 fn measured_round_duration_secs(round_started_at: Instant) -> u64 {
     round_started_at.elapsed().as_secs().max(1)
+}
+
+#[cfg(test)]
+mod session_configured_tests {
+    use super::*;
+
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+
+    #[test]
+    fn thread_start_or_resume_maps_priority_response_service_tier_to_fast() {
+        let response: ThreadStartResponse = serde_json::from_value(json!({
+            "thread": {
+                "id": "thread-1"
+            },
+            "model": "gpt-5.4",
+            "modelProvider": "openai",
+            "serviceTier": "priority",
+            "cwd": "/tmp/worktree",
+            "instructionSources": [],
+            "approvalPolicy": "never",
+            "approvalsReviewer": "user",
+            "sandbox": {
+                "type": "dangerFullAccess"
+            },
+            "permissionProfile": null,
+            "reasoningEffort": "high",
+            "activePermissionProfile": null,
+            "runtimeWorkspaceRoots": ["/tmp/worktree"]
+        }))
+        .expect("deserialize thread/start response with priority service tier");
+
+        let response = ThreadStartOrResume::Start(response);
+
+        assert_eq!(response.service_tier(), Some(ServiceTier::Fast));
+    }
 }
 
 #[cfg(test)]

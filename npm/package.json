@@ -1,6 +1,6 @@
 {
   "name": "codex-potter",
-  "version": "0.0.0-dev",
+  "version": "0.1.33",
   "license": "Apache-2.0",
   "bin": {
     "codex-potter": "bin/codex-potter.js"

@@ -2900,8 +2900,14 @@ impl ThreadStartOrResume {
 
     fn service_tier(&self) -> Option<ServiceTier> {
         match self {
-            ThreadStartOrResume::Start(resp) => resp.service_tier,
-            ThreadStartOrResume::Resume(resp) => resp.service_tier,
+            ThreadStartOrResume::Start(resp) => resp
+                .service_tier
+                .as_ref()
+                .and_then(|tier| tier.as_service_tier()),
+            ThreadStartOrResume::Resume(resp) => resp
+                .service_tier
+                .as_ref()
+                .and_then(|tier| tier.as_service_tier()),
         }
     }
 

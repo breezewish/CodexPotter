@@ -26,6 +26,7 @@ use codex_protocol::user_input::UserInput as CoreUserInput;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
+use serde::Serializer;
 use serde_json::Value as JsonValue;
 
 fn deserialize_upstream_codex_error_info_opt<'de, D>(
@@ -99,6 +100,78 @@ fn upstream_http_status_code(value: JsonValue) -> Option<u16> {
         .or_else(|| fields.remove("http_status_code"))
         .and_then(|status| status.as_u64())
         .and_then(|status| u16::try_from(status).ok())
+}
+
+/// Service tier values returned by upstream `thread/*` responses.
+///
+/// Potter only models `fast` and `flex` internally today, but upstream has already started
+/// returning additional values such as `"default"`. Preserve those wire values here and defer the
+/// lossy mapping into Potter's internal [`ServiceTier`] until the backend/session layer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UpstreamResponseServiceTier {
+    Fast,
+    Flex,
+    Default,
+    Unknown(String),
+}
+
+impl UpstreamResponseServiceTier {
+    pub fn as_service_tier(&self) -> Option<ServiceTier> {
+        match self {
+            UpstreamResponseServiceTier::Fast => Some(ServiceTier::Fast),
+            UpstreamResponseServiceTier::Flex => Some(ServiceTier::Flex),
+            UpstreamResponseServiceTier::Default | UpstreamResponseServiceTier::Unknown(_) => None,
+        }
+    }
+}
+
+impl Serialize for UpstreamResponseServiceTier {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let value = match self {
+            UpstreamResponseServiceTier::Fast => "fast",
+            UpstreamResponseServiceTier::Flex => "flex",
+            UpstreamResponseServiceTier::Default => "default",
+            UpstreamResponseServiceTier::Unknown(value) => value.as_str(),
+        };
+
+        serializer.serialize_str(value)
+    }
+}
+
+impl<'de> Deserialize<'de> for UpstreamResponseServiceTier {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Ok(match value.as_str() {
+            "fast" => UpstreamResponseServiceTier::Fast,
+            "flex" => UpstreamResponseServiceTier::Flex,
+            "default" => UpstreamResponseServiceTier::Default,
+            _ => UpstreamResponseServiceTier::Unknown(value),
+        })
+    }
+}
+
+pub fn upstream_response_service_tier_from_value(
+    value: &JsonValue,
+) -> Option<UpstreamResponseServiceTier> {
+    serde_json::from_value::<UpstreamResponseServiceTier>(value.clone()).ok()
+}
+
+fn deserialize_response_service_tier_opt<'de, D>(
+    deserializer: D,
+) -> Result<Option<UpstreamResponseServiceTier>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<JsonValue>::deserialize(deserializer)?;
+    Ok(value
+        .as_ref()
+        .and_then(upstream_response_service_tier_from_value))
 }
 
 /// Upstream approval policy for agent tool executions.
@@ -753,7 +826,8 @@ pub struct ThreadStartResponse {
     pub thread: Thread,
     pub model: String,
     pub model_provider: String,
-    pub service_tier: Option<ServiceTier>,
+    #[serde(default, deserialize_with = "deserialize_response_service_tier_opt")]
+    pub service_tier: Option<UpstreamResponseServiceTier>,
     pub cwd: PathBuf,
     #[serde(default)]
     pub instruction_sources: Vec<AbsolutePathBuf>,
@@ -797,7 +871,8 @@ pub struct ThreadResumeResponse {
     pub thread: Thread,
     pub model: String,
     pub model_provider: String,
-    pub service_tier: Option<ServiceTier>,
+    #[serde(default, deserialize_with = "deserialize_response_service_tier_opt")]
+    pub service_tier: Option<UpstreamResponseServiceTier>,
     pub cwd: PathBuf,
     #[serde(default)]
     pub instruction_sources: Vec<AbsolutePathBuf>,
@@ -1532,6 +1607,7 @@ mod tests {
     use super::TurnError;
     use super::TurnStartParams;
     use super::TurnStatus;
+    use super::UpstreamResponseServiceTier;
 
     #[test]
     fn turn_error_handles_supported_and_unknown_upstream_codex_error_info_shapes() {
@@ -1711,6 +1787,62 @@ mod tests {
 
         assert_eq!(response.approvals_reviewer, ApprovalsReviewer::AutoReview);
         assert_eq!(response.permission_profile, None);
+    }
+
+    #[test]
+    fn thread_start_response_preserves_default_service_tier() {
+        let response: ThreadStartResponse = serde_json::from_value(json!({
+            "thread": {
+                "id": "thread-1"
+            },
+            "model": "gpt-5.4",
+            "modelProvider": "openai",
+            "serviceTier": "default",
+            "cwd": "/tmp/worktree",
+            "instructionSources": [],
+            "approvalPolicy": "never",
+            "approvalsReviewer": "user",
+            "sandbox": {
+                "type": "dangerFullAccess"
+            },
+            "permissionProfile": null,
+            "reasoningEffort": "high",
+            "activePermissionProfile": null,
+            "runtimeWorkspaceRoots": ["/tmp/worktree"]
+        }))
+        .expect("deserialize thread/start response with default service tier");
+
+        assert_eq!(
+            response.service_tier,
+            Some(UpstreamResponseServiceTier::Default)
+        );
+    }
+
+    #[test]
+    fn thread_resume_response_preserves_unknown_service_tier() {
+        let response: ThreadResumeResponse = serde_json::from_value(json!({
+            "thread": {
+                "id": "thread-1"
+            },
+            "model": "gpt-5.4",
+            "modelProvider": "openai",
+            "serviceTier": "priority",
+            "cwd": "/tmp/worktree",
+            "instructionSources": [],
+            "approvalPolicy": "never",
+            "approvalsReviewer": "user",
+            "sandbox": {
+                "type": "dangerFullAccess"
+            },
+            "permissionProfile": null,
+            "reasoningEffort": null
+        }))
+        .expect("deserialize thread/resume response with unknown service tier");
+
+        assert_eq!(
+            response.service_tier,
+            Some(UpstreamResponseServiceTier::Unknown("priority".to_string()))
+        );
     }
 
     #[test]

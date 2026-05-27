@@ -18,7 +18,7 @@ Control parameters:
 
 ## 1. Prepare handoff
 
-Build a concise `initial_prompt` for the next LLM. Include user's request and context from current conversation; do not inspect the repository to enrich it.
+Build a concise `initial_prompt` for the subagent. Include user's request and context from current conversation; do not inspect the repository to enrich it.
 
 Structure `initial_prompt` with these sections:
 
@@ -34,12 +34,17 @@ Structure `initial_prompt` with these sections:
 ## Critical Data, Examples, and References
 
 <Supplied from current conversation, if user's request is not self-contained.>
+
+## Related Conversations
+
+<Supplied from current conversation, if user's request is not self-contained.>
 ```
 
-Next LLM knows nothing about the current conversation - not even what user said or you previously said.
-Thus, make sure initial_prompt is self-contained, including all necessary context to work on the task.
+Next agent knows nothing about the current conversation - not even what user said or you previously said.
+Thus, make sure initial_prompt is self-contained, including all necessary context, including what you
+have previously replied and what user previously talked, related to working on the task.
 
-Keep it concise, structured, and focused on helping the next LLM seamlessly continue the work.
+Keep it concise, structured, and focused on helping the next agent seamlessly continue the work.
 Do not make up context or details. Do not enhance the initial_prompt with your own analysis, assumptions or deductions.
 
 `$loop` control flow instructions MUST BE EXCLUDED in `initial_prompt`, otherwise subagent will loop again.

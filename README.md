@@ -22,7 +22,7 @@ For agents: This file is carefully maintained and polished for better readabilit
 [![License](https://img.shields.io/github/license/breezewish/CodexPotter?label=License&style=flat-square)](./LICENSE)
 [![LinuxDo](https://img.shields.io/badge/Community-LINUX%20DO-blue?style=flat-square)](https://linux.do)
 
-**CodexPotter** continuously **reconciles** code base toward your instructed state ([Ralph Wiggum pattern](https://ghuntley.com/ralph/)):
+**CodexPotter** is a better /goal replacement —— it continuously **reconciles** code base toward your instructed goal or state ([Ralph Wiggum pattern](https://ghuntley.com/ralph/)):
 
 - 🤖 **Codex-first** — Codex subscription is all you need; no extra LLM needed.
 - 🧭 **Auto-review / reconcile** — Review and polish multi rounds until fully aligned with your instruction.
@@ -33,6 +33,16 @@ For agents: This file is carefully maintained and polished for better readabilit
 - 🧠 **File system as memory** — Store instructions in files to resist compaction and preserve all details.
 - 🪶 **Tiny footprint** — Use [<1k tokens](./npm/resources/potter_worker.toml), ensuring LLM context fully serves your business logic.
 - 📚 **Built-in knowledge base** — Keep a local KB as index so Codex learns project fast in clean contexts.
+
+&ensp;
+
+## CodexPotter ($loop) vs /goal
+
+CodexPotter always use fresh contexts for new rounds, thus:
+
+- It avoids context rotting, producing better results by auto reviewing and fixing in later rounds
+- It consumes more tokens
+- More unattended: queue multiple $loop tasks and go to sleep, they will execute one by one
 
 &ensp;
 
@@ -71,18 +81,17 @@ To learn more, see details below:
 
 1. Use the all-in-one wizard, it helps you set up gitignore, subagent definitions and skills _globally_:
 
-```bash
-npx codex-potter@next setup
-```
+   ```bash
+   npx codex-potter@next setup
+   ```
 
-2. Use `$loop` to trigger the CodexPotter workflow in Codex CLI or Codex Desktop:
+2. Use `$loop` to trigger the workflow in Codex CLI or Codex Desktop:
 
-```plain
-$loop Implement /ps endpoint according to docs/ps_design.md
-```
+   ```plain
+   $loop Implement /ps endpoint according to docs/ps_design.md
+   ```
 
 &ensp;
-
 
 **Codex CLI Users:**
 
@@ -94,8 +103,33 @@ If you prefer CLI, we recommend to [use the V1 version](https://github.com/breez
 
 &ensp;
 
+**All skills:**
 
-## Tips
+- `$loop`: run the reconciliation workflow
+
+- `$compact-kb`: reorganize the local KB, make it more compact and efficient for later runs
+
+&ensp;
+
+## Recommended Skills
+
+See [this repo](https://github.com/breezewish/skills) to install. Use these skills to make CodexPotter more powerful and unattended.
+
+- `$codex-review`: review code changes using fresh context, the same as Codex's /review, but you can use it with $loop. Example:
+
+   ```plain
+   $loop Use $codex-review to review code change in recent 2 days and fix all
+   ```
+
+- `$simplify`: review and simplify the code, the same as Claude Code's /simplify, but you can use it with $loop. Example:
+
+    ```plain
+    $loop Use $simplify for code change in recent 2 days
+    ```
+
+&ensp;
+
+## 👀 Tips
 
 ### Prompt Examples
 
@@ -146,17 +180,25 @@ Make sure all user journeys are properly covered by e2e tests and pass.
 
 </details>
 
+<details>
+<summary>Update CodexPotter</summary>
+
+Run this again to update skills and prompts to the latest version:
+
+```bash
+npx codex-potter@next setup
+```
+
+</details>
+
 &ensp;
 
 ## Roadmap
 
 - [x] Resume
-- [ ] Handling steer
-- [ ] Better handling of stream disconnect / similar network issues
-- [ ] Agent-call friendly (non-interactive exec and resume)
 - [x] Interoperability with codex CLI sessions (for follow-up prompts)
-- [ ] Better plan / user selection support
 - [x] Better sandbox support
+- [ ] Handling steer
 
 &ensp;
 

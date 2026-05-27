@@ -34,10 +34,6 @@ Structure `initial_prompt` with these sections:
 ## Critical Data, Examples, and References
 
 <Supplied from current conversation, if user's request is not self-contained.>
-
-## Related Conversations
-
-<Supplied from current conversation, if user's request is not self-contained.>
 ```
 
 Next agent knows nothing about the current conversation - not even what user said or you previously said.
@@ -93,8 +89,8 @@ Run at most 6 rounds by default (user can change via --rounds N). In each round,
 1. Start one subagent using the `potter_worker` agent.
 2. Prompt the subagent with handoff file path only:
 
-   ```text
-   Work according to this handoff file: <path to handoff md file>
+   ```md
+   Work according to [this handoff file](<path to handoff md file>)
    ```
 
 3. Wait for the subagent to finish. Subagent may take long time (e.g. 3 hours). Wait patiently, do not timeout or interrupt it.

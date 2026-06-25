@@ -8,17 +8,12 @@ For agents: This file is carefully maintained and polished for better readabilit
   <img src="./etc/banner.svg" alt="CodexPotter banner" />
 </p>
 
-<p align="center">
-  <img src="./etc/screenshot.png" alt="CodexPotter screenshot" width="80%" />
-</p>
-
 &ensp;
 
 ## 💡 Why CodexPotter ($loop)
 
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-blue?style=flat-square)](#)
 [![npm](https://img.shields.io/npm/v/codex-potter?label=Release&style=flat-square)](https://www.npmjs.com/package/codex-potter)
-[![CI](https://img.shields.io/github/actions/workflow/status/breezewish/CodexPotter/ci.yml?branch=main&label=CI&style=flat-square)](https://github.com/breezewish/CodexPotter/actions/workflows/ci.yml)
 [![License](https://img.shields.io/github/license/breezewish/CodexPotter?label=License&style=flat-square)](./LICENSE)
 [![LinuxDo](https://img.shields.io/badge/Community-LINUX%20DO-blue?style=flat-square)](https://linux.do)
 
@@ -54,11 +49,11 @@ CodexPotter always use fresh contexts for new rounds, thus:
                                                 𝘚𝘪𝘮𝘱𝘭𝘪𝘧𝘺 𝘵𝘩𝘦 𝘲𝘶𝘦𝘳𝘺 𝘦𝘯𝘨𝘪𝘯𝘦 𝘣𝘺 𝘧𝘰𝘭𝘭𝘰𝘸𝘪𝘯𝘨 ...
                                                                 │
                                                                 │
-     codex: Work or review according to MAIN.md                 │
+     codex: Continue working toward HANDOFF.md                 │
             ┌─────────────────────────┐                         │
             │                         │                         ▼
   ┌─────────┴─────────┐     ┌─────────▼────────┐       ┌───────────────────┐
-  │    main agent     │     │     subagent     │◄─────►│      MAIN.md      │
+  │    main agent     │     │     subagent     │◄─────►│      HANDOFF.md      │
   └─────────▲─────────┘     └─────────┬────────┘       └───────────────────┘
             │                         │
             │      Work finished      │
@@ -68,18 +63,13 @@ CodexPotter always use fresh contexts for new rounds, thus:
 
 &ensp;
 
-To learn more, see details below:
-
-- [Skill File](./skills/loop/SKILL.md) - used when $loop
-- [Workflow Instruction](./npm/resources/potter_worker.toml) - used by subagents spawned from $loop
+To learn more, see [$loop Skill File](./skills/loop/SKILL.md).
 
 &ensp;
 
 ## ⚡️ Getting started
 
-**Codex Desktop Users:**
-
-1. Use the all-in-one wizard, it helps you set up gitignore, subagent definitions and skills _globally_:
+1. Use the all-in-one wizard, it helps you (1) set up necessary global gitignore, (2) install skills via `npx skills`:
 
    ```bash
    npx codex-potter@next setup
@@ -90,16 +80,6 @@ To learn more, see details below:
    ```plain
    $loop Implement /ps endpoint according to docs/ps_design.md
    ```
-
-&ensp;
-
-**Codex CLI Users:**
-
-If you prefer CLI, we recommend to [use the V1 version](https://github.com/breezewish/CodexPotter):
-
-- Same prompt, same result quality.
-- Standalone CLI utility for **denoised experience**.
-- Good for CLI and agent call usage (invoked by other agents).
 
 &ensp;
 
@@ -198,7 +178,7 @@ npx codex-potter@next setup
 - [x] Resume
 - [x] Interoperability with codex CLI sessions (for follow-up prompts)
 - [x] Better sandbox support
-- [ ] Handling steer
+- [x] Handling steer
 
 &ensp;
 

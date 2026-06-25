@@ -11,12 +11,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "..", "..");
 const cliPath = path.join(repoRoot, "npm", "bin", "codex-potter.js");
-const profileSourcePath = path.join(
-  repoRoot,
-  "npm",
-  "resources",
-  "potter_worker.toml",
-);
 
 async function writeFakeInstaller(bin, commandName, outputText) {
   const commandPath = path.join(
@@ -114,6 +108,17 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function legacyProfilePath(fixture) {
+  return path.join(fixture.home, ".codex", "agents", "potter_worker.toml");
+}
+
+async function writeLegacyProfile(fixture, content = "legacy profile\n") {
+  const filePath = legacyProfilePath(fixture);
+  await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.promises.writeFile(filePath, content, "utf8");
+  return filePath;
+}
+
 async function cleanupFixture(fixture) {
   await fs.promises.rm(fixture.root, { recursive: true, force: true });
 }
@@ -135,7 +140,7 @@ test("lists available commands when no command is provided", async () => {
   }
 });
 
-test("setup --yes writes files and pipes the loop skill installer", async () => {
+test("setup --yes updates gitignore, skips absent legacy profile, and pipes the loop skill installer", async () => {
   const fixture = await makeFixture();
 
   try {
@@ -146,7 +151,7 @@ test("setup --yes writes files and pipes the loop skill installer", async () => 
     assert.equal(result.code, 0);
     assert.doesNotMatch(result.stdout, /Planned setup:/);
     assert.match(result.stdout, /Todo: Ignore \/.codexpotter in global gitignore/);
-    assert.match(result.stdout, /Todo: Add subagent profile .*potter_worker\.toml/);
+    assert.match(result.stdout, /Skip: Remove legacy subagent profile .*potter_worker\.toml/);
     assert.match(result.stdout, /Todo: Install \/ update skill:/);
     assert.match(
       result.stdout,
@@ -157,7 +162,7 @@ test("setup --yes writes files and pipes the loop skill installer", async () => 
       new RegExp(`✓ Added \\/\\.codexpotter to ${escapeRegExp(gitignorePath)}`),
     );
     assert.doesNotMatch(result.stdout, /\(global gitignore file\)/);
-    assert.match(result.stdout, /✓ Added subagent profile .*potter_worker\.toml/);
+    assert.doesNotMatch(result.stdout, /✓ Removed legacy subagent profile .*potter_worker\.toml/);
     assert.doesNotMatch(result.stdout, /Confirmation skipped/);
     assert.doesNotMatch(result.stdout, /Running loop skill installer/);
     assert.match(result.stdout, /fake npx skills installer/);
@@ -167,22 +172,31 @@ test("setup --yes writes files and pipes the loop skill installer", async () => 
     assert.equal(result.stderr, "");
 
     assert.equal(await fs.promises.readFile(gitignorePath, "utf8"), "/.codexpotter\n");
-
-    const profilePath = path.join(
-      fixture.home,
-      ".codex",
-      "agents",
-      "potter_worker.toml",
-    );
-    assert.equal(
-      await fs.promises.readFile(profilePath, "utf8"),
-      await fs.promises.readFile(profileSourcePath, "utf8"),
-    );
+    assert.equal(fs.existsSync(legacyProfilePath(fixture)), false);
 
     assert.equal(
       await fs.promises.readFile(fixture.npxLog, "utf8"),
       "--yes\nskills\nadd\n--yes\n-g\nhttps://github.com/breezewish/CodexPotter/tree/v2\n-a\ncodex\n",
     );
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test("setup --yes removes legacy profile when present", async () => {
+  const fixture = await makeFixture();
+
+  try {
+    const profilePath = await writeLegacyProfile(fixture);
+
+    const result = await runCli(fixture, ["setup", "--yes"]);
+
+    assert.equal(result.signal, null);
+    assert.equal(result.code, 0);
+    assert.match(result.stdout, /Todo: Remove legacy subagent profile .*potter_worker\.toml/);
+    assert.match(result.stdout, /✓ Removed legacy subagent profile .*potter_worker\.toml/);
+    assert.equal(result.stderr, "");
+    assert.equal(fs.existsSync(profilePath), false);
   } finally {
     await cleanupFixture(fixture);
   }
@@ -235,7 +249,7 @@ test("setup waits for confirmation before writing files", async () => {
     );
     assert.equal(
       fs.existsSync(
-        path.join(fixture.home, ".codex", "agents", "potter_worker.toml"),
+        legacyProfilePath(fixture),
       ),
       false,
     );
@@ -362,7 +376,43 @@ test("setup preserves global gitignore changes made during confirmation", async 
   }
 });
 
-test("setup --yes does not duplicate existing gitignore or profile content", async () => {
+test("setup removes a legacy profile created during confirmation", async () => {
+  const fixture = await makeFixture();
+
+  try {
+    const profilePath = legacyProfilePath(fixture);
+    const child = spawnCli(fixture, ["setup"], "pipe");
+    let stdout = "";
+    let stderr = "";
+    let confirmed = false;
+
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString("utf8");
+      if (!confirmed && stdout.includes("Continue? ● Yes / ○ No")) {
+        confirmed = true;
+        fs.mkdirSync(path.dirname(profilePath), { recursive: true });
+        fs.writeFileSync(profilePath, "created during confirmation\n", "utf8");
+        child.stdin.end("yes\n");
+      }
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString("utf8");
+    });
+
+    const [code, signal] = await once(child, "exit");
+
+    assert.equal(confirmed, true);
+    assert.equal(signal, null);
+    assert.equal(code, 0);
+    assert.match(stdout, /✓ Removed legacy subagent profile .*potter_worker\.toml/);
+    assert.equal(stderr, "");
+    assert.equal(fs.existsSync(profilePath), false);
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test("setup --yes does not duplicate existing gitignore and keeps legacy profile removed", async () => {
   const fixture = await makeFixture();
 
   try {
@@ -370,27 +420,17 @@ test("setup --yes does not duplicate existing gitignore or profile content", asy
     await fs.promises.mkdir(path.dirname(gitignorePath), { recursive: true });
     await fs.promises.writeFile(gitignorePath, ".codexpotter/\n", "utf8");
 
-    const profilePath = path.join(
-      fixture.home,
-      ".codex",
-      "agents",
-      "potter_worker.toml",
-    );
-    await fs.promises.mkdir(path.dirname(profilePath), { recursive: true });
-    await fs.promises.copyFile(profileSourcePath, profilePath);
-
     const result = await runCli(fixture, ["setup", "--yes"]);
 
     assert.equal(result.signal, null);
     assert.equal(result.code, 0);
     assert.match(result.stdout, /Skip: Ignore \/.codexpotter in global gitignore/);
-    assert.match(result.stdout, /Skip: Add subagent profile .*potter_worker\.toml/);
+    assert.match(result.stdout, /Skip: Remove legacy subagent profile .*potter_worker\.toml/);
     assert.doesNotMatch(result.stdout, /already has \.codexpotter entry/);
     assert.doesNotMatch(result.stdout, /already up to date \(/);
     assert.doesNotMatch(result.stdout, /Global gitignore already configured\./);
-    assert.doesNotMatch(result.stdout, /Subagent profile already up to date\./);
     assert.doesNotMatch(result.stdout, /Global gitignore updated\./);
-    assert.doesNotMatch(result.stdout, /Subagent profile installed\./);
+    assert.doesNotMatch(result.stdout, /✓ Removed legacy subagent profile .*potter_worker\.toml/);
     assert.doesNotMatch(result.stdout, /Running loop skill installer/);
     assert.match(result.stdout, /Todo: Install \/ update skill:/);
     assert.match(
@@ -400,10 +440,7 @@ test("setup --yes does not duplicate existing gitignore or profile content", asy
     assert.equal(result.stderr, "");
 
     assert.equal(await fs.promises.readFile(gitignorePath, "utf8"), ".codexpotter/\n");
-    assert.equal(
-      await fs.promises.readFile(profilePath, "utf8"),
-      await fs.promises.readFile(profileSourcePath, "utf8"),
-    );
+    assert.equal(fs.existsSync(legacyProfilePath(fixture)), false);
     assert.equal(
       await fs.promises.readFile(fixture.npxLog, "utf8"),
       "--yes\nskills\nadd\n--yes\n-g\nhttps://github.com/breezewish/CodexPotter/tree/v2\n-a\ncodex\n",
@@ -420,15 +457,7 @@ test("setup colors plan status labels when color is enabled", async () => {
     const gitignorePath = path.join(fixture.xdg, "git", "ignore");
     await fs.promises.mkdir(path.dirname(gitignorePath), { recursive: true });
     await fs.promises.writeFile(gitignorePath, ".codexpotter/\n", "utf8");
-
-    const profilePath = path.join(
-      fixture.home,
-      ".codex",
-      "agents",
-      "potter_worker.toml",
-    );
-    await fs.promises.mkdir(path.dirname(profilePath), { recursive: true });
-    await fs.promises.copyFile(profileSourcePath, profilePath);
+    await writeLegacyProfile(fixture);
 
     const result = await runCli(fixture, ["setup", "--yes"], {
       env: {

@@ -6,5 +6,5 @@ Set up CodexPotter for use from Codex:
 npx codex-potter@next setup
 ```
 
-The setup command configures the global gitignore, installs the CodexPotter
-subagent profile, and installs the `$loop` skill.
+The setup command configures the global gitignore, removes the legacy
+CodexPotter subagent profile if it exists, and installs the `$loop` skill.

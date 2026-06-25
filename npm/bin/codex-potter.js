@@ -4,10 +4,6 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
-import { fileURLToPath } from "node:url";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 const CODEXPOTTER_GITIGNORE_ENTRY = "/.codexpotter";
 const LOOP_SKILL_COMMAND = [
@@ -93,27 +89,23 @@ function printErrors(errors) {
 
 async function runSetup({ yes }) {
   const home = getHomeDir();
-  const resourcePath = path.join(
-    __dirname,
-    "..",
-    "resources",
+  const legacyProfilePath = path.join(
+    home,
+    ".codex",
+    "agents",
     "potter_worker.toml",
   );
-  const profilePath = path.join(home, ".codex", "agents", "potter_worker.toml");
-  const profileContent = await fs.promises.readFile(resourcePath, "utf8");
 
   const globalGitignore = resolveGlobalGitignore(home);
   const gitignoreContent = await readTextIfExists(globalGitignore.path);
   const gitignoreNeedsWrite = !gitignoreIgnoresCodexPotter(gitignoreContent);
-
-  const currentProfileContent = await readTextIfExists(profilePath);
-  const profileNeedsWrite = currentProfileContent !== profileContent;
+  const legacyProfileNeedsRemoval = await pathExists(legacyProfilePath);
   const skillInstaller = resolveSkillInstaller();
 
   printSetupPlan({
     gitignoreNeedsWrite,
-    profileNeedsWrite,
-    profilePath,
+    legacyProfileNeedsRemoval,
+    legacyProfilePath,
     skillInstaller,
   });
 
@@ -134,12 +126,10 @@ async function runSetup({ yes }) {
     }
   }
 
-  if (profileNeedsWrite) {
-    await fs.promises.mkdir(path.dirname(profilePath), { recursive: true });
-    await fs.promises.writeFile(profilePath, profileContent, "utf8");
+  if (await removeFileIfExists(legacyProfilePath)) {
     console.log(
-      `${format("✓ Added", "green")} subagent profile ${format(
-        displayPath(profilePath),
+      `${format("✓ Removed", "green")} legacy subagent profile ${format(
+        displayPath(legacyProfilePath),
         "dim",
       )}`,
     );
@@ -159,8 +149,8 @@ async function runSetup({ yes }) {
 
 function printSetupPlan({
   gitignoreNeedsWrite,
-  profileNeedsWrite,
-  profilePath,
+  legacyProfileNeedsRemoval,
+  legacyProfilePath,
   skillInstaller,
 }) {
   console.log(format("CodexPotter setup", "bold"));
@@ -172,8 +162,8 @@ function printSetupPlan({
     )} in global gitignore`,
   );
   console.log(
-    `${statusLabel(profileNeedsWrite)} Add subagent profile ${format(
-      displayPath(profilePath),
+    `${statusLabel(legacyProfileNeedsRemoval)} Remove legacy subagent profile ${format(
+      displayPath(legacyProfilePath),
       "dim",
     )}`,
   );
@@ -327,6 +317,30 @@ async function readTextIfExists(filePath) {
   } catch (error) {
     if (error && error.code === "ENOENT") {
       return "";
+    }
+    throw error;
+  }
+}
+
+async function pathExists(filePath) {
+  try {
+    await fs.promises.access(filePath, fs.constants.F_OK);
+    return true;
+  } catch (error) {
+    if (error && error.code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+}
+
+async function removeFileIfExists(filePath) {
+  try {
+    await fs.promises.unlink(filePath);
+    return true;
+  } catch (error) {
+    if (error && error.code === "ENOENT") {
+      return false;
     }
     throw error;
   }

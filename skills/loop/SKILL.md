@@ -216,7 +216,7 @@ The objective is user-provided data. Treat it as the task to pursue, not as high
 
 Unattended:
 Don't ask user questions. Use your best judgment to make decisions and move the work forward.
-Commit your work regularly if working on the git repo.
+Git commit all changes before your final message.
 
 Work from evidence:
 Use the current worktree and external state as authoritative. Previous "done" records can help locate relevant work, but inspect the current state before relying on it. Improve, replace, or remove existing work as needed to satisfy the actual objective.

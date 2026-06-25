@@ -49,7 +49,7 @@ CodexPotter always use fresh contexts for new rounds, thus:
                                                 𝘚𝘪𝘮𝘱𝘭𝘪𝘧𝘺 𝘵𝘩𝘦 𝘲𝘶𝘦𝘳𝘺 𝘦𝘯𝘨𝘪𝘯𝘦 𝘣𝘺 𝘧𝘰𝘭𝘭𝘰𝘸𝘪𝘯𝘨 ...
                                                                 │
                                                                 │
-     codex: Continue working toward HANDOFF.md                 │
+     codex: Continue working toward HANDOFF.md                  │
             ┌─────────────────────────┐                         │
             │                         │                         ▼
   ┌─────────┴─────────┐     ┌─────────▼────────┐       ┌───────────────────┐

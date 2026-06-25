@@ -69,10 +69,23 @@ To learn more, see [$loop Skill File](./skills/loop/SKILL.md).
 
 ## ⚡️ Getting started
 
-1. Use the all-in-one wizard, it helps you (1) set up necessary global gitignore, (2) install skills via `npx skills`:
+1. Use the all-in-one wizard, it helps you set up necessary global gitignore and install skills via `npx skills`:
 
    ```bash
    npx codex-potter@next setup
+   ```
+
+   You will be prompted about what will be done, just confirm to continue:
+
+   ```bash
+   ➜  ~ npx codex-potter@next setup
+   CodexPotter setup
+
+   ✓ Skip: Ignore /.codexpotter in global gitignore
+   ✓ Skip: Remove legacy subagent profile ~/.codex/agents/potter_worker.toml
+   □ Todo: Install / update skill: npx --yes skills add --yes -g https://github.com/breezewish/CodexPotter/tree/v2 -a codex
+
+   Continue? ● Yes / ○ No
    ```
 
 2. Use `$loop` to trigger the workflow in Codex CLI or Codex Desktop:

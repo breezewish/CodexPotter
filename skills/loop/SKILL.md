@@ -164,7 +164,7 @@ For each round:
 
 1. Start one `default` subagent if there is no live one.
 2. Send the exact Initial Prompt.
-3. Wait until the subagent finishes. It takes a lot of time to complete (e.g. > 1 hour), so be patient, do not interrupt it.
+3. Wait until the subagent finishes. It takes a lot of time to complete (e.g. > 1 hour), so be patient, do not interrupt it. Use long wait timeouts (e.g. > 1 hour), it still returns immediately when subagent finishes.
 4. Count one round.
 5. Report the exact last subagent message after removing only `::potter(...)` markers.
 6. If the message contains `::potter(exit)`, stop with state `complete`.

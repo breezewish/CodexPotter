@@ -33,7 +33,8 @@ Your rules:
 
 ## 1. Handoff
 
-If the user provides an existing handoff file path, reuse it.
+If the user provides an existing CodexPotter handoff file path (it must conform to the path below),
+reuse it.
 
 Otherwise create a new handoff file:
 
